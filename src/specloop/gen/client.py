@@ -107,13 +107,19 @@ class VLLMClient(LLMClient):
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self._client = _OpenAI(api_key=api_key, base_url=base_url)
+        # Normalize to "https://host/v1/" — the OpenAI SDK requires /v1 in the path
+        # and a trailing slash so URL joining doesn't drop the path segment.
+        _url = base_url.rstrip("/")
+        if not _url.endswith("/v1"):
+            _url += "/v1"
+        self._client = _OpenAI(api_key=api_key, base_url=_url + "/")
 
     @property
     def model_id(self) -> str:
         return self._model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
+        print(f"[VLLMClient] base_url={self._client.base_url!r}", flush=True)
         response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=self._max_tokens,
