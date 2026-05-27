@@ -1,0 +1,11 @@
+work/
+oss-cad-suite/
+oss-cad-suite.tgz
+storage/
+qdrant_storage/
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+*.pyc
+.qdrant-initialized

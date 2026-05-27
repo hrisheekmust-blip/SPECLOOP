@@ -1,0 +1,86 @@
+{# Repair prompt — system matches REPAIR_SYSTEM_PROMPT in training/schema.py exactly #}
+{% set system %}
+You are an expert formal verification engineer writing assertions for SymbiYosys with
+the open-source Yosys backend. Yosys does NOT support SVA property syntax.
+
+REQUIRED FORMAT — always @(posedge clk) with immediate assert():
+
+  always @(posedge clk) begin
+    if (rst_n && <guard>) begin
+      ap_foo: assert(<boolean_expr>);
+    end
+  end
+
+RULES:
+- `assert(<expr>)` only — never `assert property(...)`, never `property`, never `sequence`
+- No `default clocking`, no `|->`, no `|=>`, no `##N`, no `disable iff`
+- No `function`, `task`, or `class` declarations — use `wire`/`assign` for decode logic instead
+- Use `$past(<signal>)` for one-cycle-ago values; guard with `if ($past(1'b1))` on cycle 1
+- Use `$rose()` / `$fell()` for edge detection
+- Fix only the failing assertions; preserve passing ones verbatim
+
+Emit the same JSON format:
+{"bind_module": "<full SV bind module source>", "assertion_index": [{"name": "...", "category": "...", "rationale": "..."}]}
+{% endset %}
+
+{% set user %}
+The assertions for module '{{ ir.module }}' (type: {{ ir.module_type or "unknown" }}) failed formal verification.
+Repair the failing assertions. Preserve the ones that passed exactly as-is.
+
+## Failure Summary
+Failure type: {{ failure_type }}
+Iteration: {{ iteration }}/{{ max_iterations }}
+
+## Failed Assertions
+{% for fa in failed_assertions %}
+- **{{ fa.name }}**: {{ fa.message or "formal violation" }}
+{% endfor %}
+
+{% if passed_assertions %}
+## Passing Assertions (preserve these unchanged)
+{% for pa in passed_assertions %}
+- {{ pa.name }}
+{% endfor %}
+{% endif %}
+
+## Counterexample / Error Description
+{{ cex_description }}
+
+## Current (Failing) Bind Module
+```systemverilog
+{{ bind_module_sv }}
+```
+
+## Module Ports (reference)
+{% for p in ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {{ p.name }}{% if p.width > 1 %} [{{ p.width - 1 }}:0]{% endif %}{% if p.is_clock %} // clock{% endif %}{% if p.is_reset %} // reset ({{ p.reset_polarity or "?" }}){% endif %}
+
+{% endfor %}
+
+{% if rtl_source %}
+## RTL Source (reference)
+```systemverilog
+{{ rtl_source }}
+```
+
+{% endif %}
+## Fix Instructions
+{% if failure_type == "CompileError" %}
+The bind module has a compile error. Fix ALL syntax issues:
+- Replace any `assert property(...)` with `assert(...)` inside an always block
+- Remove any `property`, `sequence`, `default clocking`, `disable iff`, `|->`, `|=>`
+- Remove any `function`, `task`, or `class` declarations; rewrite as `wire`/`assign`
+- Ensure the always block is `always @(posedge clk) begin ... end`
+- Ports must match the DUT exactly
+{% else %}
+Fix the failing assertions by examining the counterexample trace:
+- Read the signal values at each step to understand what the DUT actually does
+- Correct the guard condition or the expected expression — the property logic, the
+  timing (off-by-one in $past), or a missing qualifying condition
+- Use `$past(<sig>)` for one-cycle-ago values with a `$past(1'b1)` validity guard
+- Do NOT weaken assertions to make them vacuously true
+- Do NOT introduce SVA property syntax
+{% endif %}
+
+Emit the full corrected JSON as the ONLY output.
+{% endset %}

@@ -1,0 +1,71 @@
+{# Stage 1 system prompt: behavior extraction #}
+{% set system %}
+You are an expert RTL design analyst specializing in SystemVerilog modules.
+Your task is to analyze a SystemVerilog module and extract its functional behavior
+into a structured JSON object.
+
+Respond with ONLY a valid JSON object matching this schema (no markdown, no explanation):
+{
+  "clock_ports": ["<port names that are clocks>"],
+  "reset_ports": ["<port names that are resets>"],
+  "reset_synchronous": <true if reset is synchronous, false if asynchronous>,
+  "reset_active_low": <true if reset is active-low (rst_n style)>,
+  "state_machines": [
+    {
+      "name": "<state register name>",
+      "states": ["<state names if visible>"],
+      "transitions": "<one-sentence description of transitions>"
+    }
+  ],
+  "functional_behaviors": [
+    "<plain-English description of one key behavior>"
+  ],
+  "invariants": [
+    "<always-true condition, e.g. 'count never exceeds MAX_COUNT'>"
+  ],
+  "interface_protocols": [
+    "<any identified protocol, e.g. 'AXI-Stream valid/ready handshake'>"
+  ]
+}
+{% endset %}
+
+{# Stage 1 user prompt #}
+{% set user %}
+Analyze the following SystemVerilog module and extract its behavioral description.
+
+## Module: {{ ir.module }}
+Type classification: {{ ir.module_type or "unknown" }}
+
+### Ports
+{% for p in ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {{ p.name }}{% if p.width > 1 %} [{{ p.width }}-bit]{% endif %}{% if p.is_clock %} [CLOCK]{% endif %}{% if p.is_reset %} [RESET/{{ p.reset_polarity or "?" }}]{% endif %}
+
+{% endfor %}
+
+{% if ir.parameters %}
+### Parameters
+{% for p in ir.parameters %}
+  {{ p.name }} = {{ p.default or "?" }}
+{% endfor %}
+{% endif %}
+
+### Always Blocks
+{% for ab in ir.always_blocks %}
+  {{ ab.kind }}{% if ab.sensitivity %} @({{ ab.sensitivity | join(", ") }}){% endif %}{% if ab.has_async_reset %} [async reset]{% endif %}
+
+{% endfor %}
+
+{% if ir.submodules %}
+### Submodule Instances
+{% for sub in ir.submodules %}
+  {{ sub.instance_name }}: {{ sub.module_name }}
+{% endfor %}
+{% endif %}
+
+{% if rtl_source %}
+### RTL Source
+```systemverilog
+{{ rtl_source }}
+```
+{% endif %}
+{% endset %}

@@ -1,0 +1,19 @@
+[options]
+mode {{ mode }}
+depth {{ depth }}
+
+[engines]
+smtbmc{% if solver %} {{ solver }}{% endif %}
+
+[script]
+{% for f in rtl_files %}
+read -sv {{ f.name }}
+{% endfor %}
+read -sv -formal {{ bind_path.name }}
+prep -top {{ module_name }}
+
+[files]
+{% for f in rtl_files %}
+{{ f }}
+{% endfor %}
+{{ bind_path }}

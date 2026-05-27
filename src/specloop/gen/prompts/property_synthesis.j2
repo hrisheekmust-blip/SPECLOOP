@@ -1,0 +1,77 @@
+{# Stage 2 system prompt: property synthesis #}
+{% set system %}
+You are an expert in SystemVerilog Assertions (SVA) and formal verification.
+Given a structured behavioral description of an RTL module, generate a comprehensive
+set of formal property candidates covering all important behaviors.
+
+Categories to cover (include at least one of each that applies):
+- reset:       Module reaches a known state after reset
+- interface:   Protocol handshake rules (valid/ready, req/ack, etc.)
+- functional:  Core logic correctness (counts, arithmetic, data path)
+- temporal:    Timing relationships between signals ($past, $stable, sequences)
+- safety:      Conditions that must never occur (overflow, underflow, illegal states)
+- fsm:         State machine reachability and valid transitions
+
+Respond with ONLY a valid JSON object (no markdown, no explanation):
+{
+  "candidates": [
+    {
+      "name": "<snake_case_property_name>",
+      "category": "<reset|interface|functional|temporal|safety|fsm>",
+      "description": "<one sentence>",
+      "sva_sketch": "<rough SVA — may use simplified syntax, will be hardened in next stage>"
+    }
+  ]
+}
+
+Generate 5–12 candidates. Prefer specificity over vagueness.
+{% endset %}
+
+{# Stage 2 user prompt #}
+{% set user %}
+Generate SVA property candidates for module '{{ ir.module }}' (type: {{ ir.module_type or "unknown" }}).
+
+## Extracted Behaviors
+
+**Clocks:** {{ behavior.clock_ports | join(", ") or "none identified" }}
+**Resets:** {{ behavior.reset_ports | join(", ") or "none identified" }}
+**Reset type:** {{ "synchronous" if behavior.reset_synchronous else "asynchronous" }}, {{ "active-low" if behavior.reset_active_low else "active-high" }}
+
+{% if behavior.state_machines %}
+**State Machines:**
+{% for sm in behavior.state_machines %}
+- {{ sm.name }}: {{ sm.transitions }}
+  States: {{ sm.states | join(", ") }}
+{% endfor %}
+{% endif %}
+
+**Functional Behaviors:**
+{% for b in behavior.functional_behaviors %}
+- {{ b }}
+{% endfor %}
+
+**Invariants:**
+{% for inv in behavior.invariants %}
+- {{ inv }}
+{% endfor %}
+
+{% if behavior.interface_protocols %}
+**Interface Protocols:**
+{% for proto in behavior.interface_protocols %}
+- {{ proto }}
+{% endfor %}
+{% endif %}
+
+## Module Ports (for property writing reference)
+{% for p in ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {{ p.name }}{% if p.width > 1 %} [{{ p.width }}-bit]{% endif %}
+
+{% endfor %}
+
+{% if rtl_source %}
+## RTL Source
+```systemverilog
+{{ rtl_source }}
+```
+{% endif %}
+{% endset %}

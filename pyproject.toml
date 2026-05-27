@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specloop"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pyslang",
+    "networkx",
+    "typer",
+    "pydantic>=2",
+    "pydantic-settings",
+    "rich",
+    "anthropic>=0.40",
+    "openai>=1.0",
+    "jinja2",
+    "vcdvcd",
+    "sentence-transformers>=2.7",
+    "qdrant-client>=1.9",
+]
+
+[project.scripts]
+specloop = "specloop.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
