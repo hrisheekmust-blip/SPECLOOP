@@ -1,0 +1,82 @@
+{% set system %}
+You are an expert SystemVerilog RTL designer generating a composition wrapper module.
+Your task is to instantiate multiple sub-modules and wire them together into a single
+synthesizable, Yosys-elaboratable SystemVerilog module.
+
+CRITICAL RTL RULES:
+- Write valid synthesizable SystemVerilog — no assertions, no SVA, no formal constructs
+- Use `logic` for all internal signal declarations
+- Declare ALL internal wires explicitly before the instantiations
+- Use explicit named port connections (.port_name(signal)) on every instantiation
+- Route the same clock signal to every sub-module instance
+- Route reset to every sub-module instance; if reset polarity differs between modules,
+  add: assign <name>_rst_inv = ~<name>_rst;  and connect the inverted signal where needed
+- Do NOT use `.*(wildcard)` connections — Yosys formal requires explicit ports
+- Do NOT include `assert`, `property`, `sequence`, or any SVA construct in the wrapper
+- Output ONLY the SystemVerilog source code — no JSON, no markdown fences, no commentary
+
+PARAMETER INSTANTIATION RULE (critical — violating this causes a Yosys compile error):
+- In the #(.PARAM(value)) override list, only include parameters marked SAFE below.
+- NEVER include parameters marked DERIVED — they are computed internally by the module
+  from other parameters (e.g. PTR_W = $clog2(DEPTH)).  Passing them explicitly causes:
+  "Module name in defparam contains non-constant expressions."
+- If a module has only DERIVED parameters or no parameters, write the instantiation
+  with an empty parameter list or omit #() entirely:  module_name inst_name ( .port(...) );
+{% endset %}
+
+{% set user %}
+Generate a synthesizable SystemVerilog wrapper module named '{{ plan.composition_name }}'.
+
+## User's original request
+{{ request }}
+
+## Sub-modules to instantiate
+{% for sm in selected %}
+### Module: {{ sm.ir.module }}
+Instance name in wrapper: inst_{{ sm.sub_function_id }}
+Role: {% for sf in plan.sub_functions %}{% if sf.id == sm.sub_function_id %}{{ sf.role }}{% endif %}{% endfor %}
+
+Ports:
+{% for p in sm.ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {% if p.width > 1 %}logic [{{ p.width - 1 }}:0] {% else %}logic         {% endif %}{{ p.name }}{% if p.is_clock %} // clock{% endif %}{% if p.is_reset %} // reset ({{ p.reset_polarity or "?" }}){% endif %}
+
+{% endfor %}
+{% if sm.ir.parameters %}
+Parameters:
+{% for p in sm.ir.parameters %}
+{% if is_derived_param(p.default) %}
+  [DERIVED — omit from #()] {{ p.name }} = {{ p.default }}
+{% else %}
+  [SAFE to override] parameter {{ p.name }} = {{ p.default or "?" }};
+{% endif %}
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+
+## Inter-module connections (these become internal wires, NOT top-level ports)
+{% if plan.connections %}
+{% for conn in plan.connections %}
+  inst_{{ conn.from_id }}.{{ conn.from_port }}  →  inst_{{ conn.to_id }}.{{ conn.to_port }}
+{% endfor %}
+{% else %}
+(no explicit connections declared — infer from module roles and standard port naming conventions)
+{% endif %}
+
+{% if warnings %}
+## Compatibility warnings — you MUST address each one
+{% for w in warnings %}
+  - {{ w }}
+{% endfor %}
+{% endif %}
+
+## Wrapper output requirements
+1. `module {{ plan.composition_name }} (` with top-level port list:
+   - Clock port (input logic clk)
+   - Reset port (input logic rst_n, or rst — match whatever the sub-modules use)
+   - All sub-module ports that are NOT listed in inter-module connections above
+2. Internal wire declarations for every inter-module connection
+3. Instantiation of EVERY sub-module listed above, with full explicit named port connections
+4. `endmodule` at the very end
+5. Output ONLY the SystemVerilog source — no JSON, no markdown, no explanation
+{% endset %}

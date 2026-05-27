@@ -143,25 +143,99 @@ def _sanitize_sv(sv: str) -> str:
 
 
 def _parse_json(raw: str, stage: str) -> dict:
-    """Extract and parse the first JSON object from a model response."""
+    """Extract and parse the first JSON object from a model response.
+
+    Two failure modes fixed vs a naive brace-depth scan:
+    1. { and } inside JSON string values (e.g. SV replication {8{1'b0}}) would
+       corrupt a character-blind depth counter → now skips all chars inside strings.
+    2. LLMs sometimes emit literal newline characters inside a JSON string value
+       instead of the \\n escape, making json.loads reject an otherwise correct
+       payload → retried after escaping control chars inside strings.
+    """
     raw = raw.strip()
     # Strip markdown code fences
     raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
     raw = re.sub(r"```\s*$", "", raw, flags=re.MULTILINE)
     raw = raw.strip()
+
     try:
         start = raw.index("{")
-        depth = 0
-        for i, ch in enumerate(raw[start:], start):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return json.loads(raw[start : i + 1])
-    except (ValueError, json.JSONDecodeError) as exc:
-        log.warning("Could not parse JSON from %s: %s\nRaw: %.300s", stage, exc, raw)
+    except ValueError:
+        log.warning("Could not parse JSON from %s: no '{' found\nRaw: %.300s", stage, raw)
+        return {}
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(raw[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue  # { and } inside string values don't affect nesting depth
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = raw[start : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    # Retry after escaping literal control chars in string values.
+                    # json.loads rejects a literal \n inside a string even though
+                    # the rest of the JSON is structurally valid.
+                    try:
+                        return json.loads(_escape_control_chars_in_strings(candidate))
+                    except json.JSONDecodeError as exc:
+                        log.warning(
+                            "Could not parse JSON from %s: %s\nRaw: %.300s",
+                            stage, exc, raw,
+                        )
+                        return {}
+
+    log.warning(
+        "Could not parse JSON from %s: unbalanced braces\nRaw: %.300s", stage, raw
+    )
     return {}
+
+
+def _escape_control_chars_in_strings(s: str) -> str:
+    """Escape literal newlines/tabs/carriage-returns inside JSON string values."""
+    out: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in s:
+        if escape_next:
+            out.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\" and in_string:
+            out.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string:
+            if ch == "\n":
+                out.append("\\n")
+            elif ch == "\r":
+                out.append("\\r")
+            elif ch == "\t":
+                out.append("\\t")
+            else:
+                out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _placeholder_bind(ir: ModuleIR) -> str:

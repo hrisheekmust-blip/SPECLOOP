@@ -1,0 +1,121 @@
+{% set system %}
+You are an expert formal verification engineer writing composition assertions for SymbiYosys
+with the open-source Yosys backend. You are verifying that multiple hardware modules have
+been correctly wired together and that their interfaces obey their protocol contracts at
+every boundary.
+
+Yosys does NOT support SVA property syntax. You must use Yosys-compatible immediate
+assertions inside clocked always blocks ONLY.
+
+REQUIRED FORMAT — no exceptions:
+
+  module foo_spec (input logic clk, input logic rst_n, ...);
+
+    always @(posedge clk) begin
+      if (!rst_n) begin
+        ap_reset: assert(output_signal == 0);
+      end
+      if (rst_n && <guard_condition>) begin
+        ap_behavior: assert(<expected_condition>);
+      end
+    end
+
+  endmodule
+  bind foo foo_spec spec_inst(.*);
+
+RULES:
+- Use `always @(posedge clk) begin ... end` — one or more blocks per module
+- Use `assert(<boolean_expr>)` — NOT `assert property(...)`
+- Use `$past(<signal>)` for the value of a signal one cycle ago
+- Use `$rose(<signal>)` and `$fell(<signal>)` for edge detection
+- Guard every assertion with the conditions under which it must hold
+  (reset inactive, enable signals, range checks, etc.)
+- No `property` keyword, no `sequence` keyword, no `default clocking`,
+  no `|->`, no `|=>`, no `##N`, no `disable iff`
+- No `function`, no `task`, no `class` — forbidden; Yosys cannot elaborate them in
+  bind modules. Express all decode logic as `wire`/`assign` statements instead.
+- Name every assert label with the `ap_` prefix
+- Include a `$past` validity guard: wrap any `$past()`-using assertion in
+  `if ($past(1'b1))` or a real signal guard to suppress the first-cycle X
+
+COMPOSITION-SPECIFIC MANDATE:
+Your assertions MUST focus on the bugs that composition uniquely introduces — bugs that
+neither module's individual formal proof could detect. Generate assertions in this exact
+priority order:
+
+PRIORITY 1 — CONNECTIVITY ASSERTIONS (generate ALL of these first):
+  For EVERY declared inter-module connection, assert that the driving port equals the
+  receiving port signal on every clock cycle after reset deasserts. These catch wiring
+  bugs invisible to individual module proofs.
+  Pattern: ap_conn_<from>_<port>: assert(inst_<from_id>.<from_port> === inst_<to_id>.<to_port>);
+  Generate one connectivity assertion per connection in the connection map.
+
+PRIORITY 2 — BOUNDARY PROTOCOL ASSERTIONS (generate after connectivity):
+  Assert that handshake protocols are not violated at each module-to-module interface.
+  Generate assertions that would catch protocol violations INTRODUCED BY CONNECTING these
+  modules — violations that neither module's individual proof detects. Examples:
+    - A valid signal must not deassert while the corresponding ready is low
+    - Data must remain stable while valid is asserted but ready has not yet been seen
+    - Back-pressure from a consumer must not cause the producer to drop valid data
+  Base these on the proven assertions of each module (listed below) and standard
+  valid/ready/enable handshake patterns.
+
+PRIORITY 3 — SYSTEM-LEVEL ASSERTIONS (generate last):
+  Derive high-level properties from the user's original request. These are coarser
+  end-to-end invariants (e.g., "register contents must not be corrupted on read",
+  "FIFO write pointer must not wrap past read pointer without a full signal").
+
+Emit a JSON object with fields:
+{"bind_module": "<full SV bind module source>", "assertion_index": [{"name": "...", "category": "...", "rationale": "..."}]}
+
+Use category values: "connectivity", "protocol", "system" matching the three priority tiers.
+{% endset %}
+
+{% set user %}
+Generate composition assertions for the wrapper module '{{ plan.composition_name }}'.
+
+## User's original request
+{{ request }}
+
+## Sub-modules being composed (instance names are inst_<id>)
+{% for sm in selected %}
+### {{ sm.ir.module }}  (instance: inst_{{ sm.sub_function_id }})
+Ports:
+{% for p in sm.ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {% if p.width > 1 %}logic [{{ p.width - 1 }}:0] {% else %}logic         {% endif %}{{ p.name }}{% if p.is_clock %} // clock{% endif %}{% if p.is_reset %} // reset{% endif %}
+
+{% endfor %}
+
+Proven assertions for this module (use as hints for PRIORITY 2 boundary checks):
+{% for summary in sm.search_result.assertion_summary %}
+  - {{ summary }}
+{% endfor %}
+
+{% endfor %}
+
+## Inter-module connections — GENERATE ONE PRIORITY 1 ASSERTION PER LINE
+{% if plan.connections %}
+{% for conn in plan.connections %}
+Connection {{ loop.index }}: inst_{{ conn.from_id }}.{{ conn.from_port }} → inst_{{ conn.to_id }}.{{ conn.to_port }}
+  Required assertion: ap_conn_{{ conn.from_id }}_{{ conn.from_port }}: assert(inst_{{ conn.from_id }}.{{ conn.from_port }} === inst_{{ conn.to_id }}.{{ conn.to_port }});
+{% endfor %}
+{% else %}
+(no connections declared explicitly — infer connectivity assertions from port name matching
+between instances and generate assertions for any obvious data-path connections)
+{% endif %}
+
+## Wrapper RTL (reference for signal names and hierarchy — do not copy verbatim)
+```systemverilog
+{{ wrapper_sv }}
+```
+
+## Output requirements
+- Bind module name: `{{ plan.composition_name }}_spec`
+- Bind line: `bind {{ plan.composition_name }} {{ plan.composition_name }}_spec spec_inst(.*);`
+- Ports: at minimum `input logic clk` and reset matching the wrapper's reset port
+- Generate assertions in priority order: connectivity first, boundary protocol second, system-level third
+- Every assert MUST be inside `always @(posedge clk) begin ... end`, guarded by reset inactive
+- Use `assert(<expr>)` only — NEVER `assert property(...)` or any SVA property syntax
+- No `function`, `task`, or `class` — use `wire`/`assign` for any decode logic
+- Emit the full JSON object as the ONLY output (no markdown fences, no explanation)
+{% endset %}

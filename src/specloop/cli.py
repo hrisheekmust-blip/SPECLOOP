@@ -778,5 +778,178 @@ def search_modules(
                 console.print(f"  [dim]{line}[/dim]")
 
 
+@app.command()
+def compose(
+    request: str = typer.Argument(..., help="Natural language description of the module to build"),
+    work: Path = typer.Option(Path("work"), "--work", "-w", help="Work directory with IR and RTL files"),
+    out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output directory (default: work/compose/)"),
+    top_k: int = typer.Option(3, "--top-k", "-k", help="Qdrant candidates per sub-function"),
+    min_confidence: float = typer.Option(0.5, "--min-confidence", help="Min proof confidence for a candidate module"),
+    min_score: float = typer.Option(0.70, "--min-score", help="Min search score; sub-functions below this are skipped"),
+    no_verify: bool = typer.Option(False, "--no-verify", "-n", help="Skip SBY verification"),
+    mode: Optional[str] = typer.Option(None, "--mode", help="Formal mode: bmc|prove|cover"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show decomposition plan only, no generation"),
+):
+    """Compose a formally-verified design from indexed modules using natural language."""
+    from specloop.config import SpecloopConfig
+    from specloop.gen.client import make_client
+    from specloop.compose.decomposer import Decomposer
+    from specloop.compose.pipeline import CompositionPipeline, CompositionError
+
+    cfg = SpecloopConfig()
+    if mode:
+        cfg = cfg.model_copy(update={"formal_mode": mode})
+
+    client = make_client(cfg)
+    console.print(f"[dim]LLM: {cfg.llm_backend} / {client.model_id}[/dim]")
+
+    # Step 1: Decompose
+    with console.status("[bold]Decomposing request into sub-functions…[/bold]"):
+        try:
+            plan = Decomposer(client).decompose(request)
+        except Exception as exc:
+            console.print(f"[red]Decomposition failed: {exc}[/red]")
+            raise typer.Exit(1)
+
+    _print_composition_plan(plan)
+
+    if dry_run:
+        raise typer.Exit(0)
+
+    # Setup SBY backend
+    formal = None
+    if not no_verify:
+        sby_bin = _find_sby_binary()
+        if sby_bin:
+            from specloop.formal.sby_backend import SBYBackend
+            formal = SBYBackend(
+                sby_path=sby_bin,
+                timeout=cfg.formal_timeout,
+                depth=cfg.formal_depth,
+                solver=cfg.formal_solver,
+                debug=cfg.formal_debug,
+            )
+        else:
+            console.print(
+                "[yellow]sby not found — skipping formal verification.[/yellow]\n"
+                "[dim]Install oss-cad-suite or add SymbiYosys to PATH.[/dim]"
+            )
+
+    out_dir = (out or work / "compose") / plan.composition_name
+
+    pipeline = CompositionPipeline(
+        client=client,
+        qdrant_url=cfg.qdrant_url,
+        collection=cfg.qdrant_collection,
+        embed_model=cfg.embed_model,
+        top_k=top_k,
+        min_confidence=min_confidence,
+        min_score=min_score,
+    )
+
+    # Steps 2-7: search, compat, wrapper, assertions, SBY
+    with console.status("[bold]Composing modules…[/bold]"):
+        try:
+            result = pipeline.run(
+                request=request,
+                plan=plan,
+                work_dir=work,
+                out_dir=out_dir,
+                formal=formal,
+                formal_mode=cfg.formal_mode,
+                formal_repair_iterations=cfg.formal_repair_iterations,
+            )
+        except CompositionError as exc:
+            console.print(f"[red]Composition error:[/red] {exc}")
+            raise typer.Exit(1)
+        except Exception as exc:
+            console.print(f"[red]Unexpected error: {exc}[/red]")
+            raise typer.Exit(1)
+
+    # ── Skipped sub-functions ───────────────────────────────────────────────
+    for warning in result.skipped_sub_functions:
+        console.print(f"[bold yellow]WARNING:[/bold yellow] {warning}")
+
+    # ── Candidate selection table ───────────────────────────────────────────
+    table = Table(title="Selected Modules", show_lines=False)
+    table.add_column("Sub-function", style="bold")
+    table.add_column("Module")
+    table.add_column("Type")
+    table.add_column("Score", justify="right")
+    table.add_column("Confidence", justify="right")
+    for sm in result.selected_modules:
+        r = sm.search_result
+        t_style = _TYPE_STYLE.get(r.module_type, "white")
+        table.add_row(
+            sm.sub_function_id,
+            r.module_name,
+            f"[{t_style}]{r.module_type}[/{t_style}]",
+            f"{r.score:.4f}",
+            f"{r.confidence:.2f}",
+        )
+    console.print(table)
+
+    # ── Compatibility table ─────────────────────────────────────────────────
+    if result.compatibility.issues:
+        compat_table = Table(title="Compatibility Checks", show_lines=False)
+        compat_table.add_column("Severity")
+        compat_table.add_column("Message")
+        for issue in result.compatibility.issues:
+            sty = "yellow" if issue.severity == "warning" else "red"
+            compat_table.add_row(
+                f"[{sty}]{issue.severity}[/{sty}]",
+                issue.message,
+            )
+        console.print(compat_table)
+    else:
+        console.print("[green]Compatibility: all checks passed.[/green]")
+
+    # ── Wrapper SV ─────────────────────────────────────────────────────────
+    console.print(f"\n[green]Wrapper written:[/green] {result.wrapper_sv_path}")
+    console.print(Syntax(
+        result.wrapper_sv_path.read_text(encoding="utf-8"),
+        "systemverilog", theme="monokai", line_numbers=True,
+    ))
+
+    # ── Assertion table ─────────────────────────────────────────────────────
+    if result.bind_result:
+        _print_assertion_table(result.bind_result.assertion_index, result.composition_name)
+
+    # ── Formal result ───────────────────────────────────────────────────────
+    if result.formal_result:
+        _print_formal_result(result.formal_result, result.composition_name, title="Composition Proof")
+    else:
+        console.print("[dim](Formal verification skipped)[/dim]")
+
+    # ── Summary ─────────────────────────────────────────────────────────────
+    console.print()
+    console.print(f"[bold green]Composition complete![/bold green]")
+    console.print(f"  Wrapper: [cyan]{result.wrapper_sv_path}[/cyan]")
+    console.print(f"  Bind:    [cyan]{result.bind_sv_path}[/cyan]")
+    console.print(f"  Confidence: {result.confidence:.2f}")
+
+
+def _print_composition_plan(plan) -> None:
+    table = Table(title=f"Composition Plan: {plan.composition_name}", show_lines=False)
+    table.add_column("ID", style="dim")
+    table.add_column("Sub-function", style="bold")
+    table.add_column("Search query")
+    table.add_column("Role")
+    for sf in plan.sub_functions:
+        table.add_row(sf.id, sf.name, sf.search_query, sf.role)
+    console.print(table)
+
+    if plan.connections:
+        conn_table = Table(title="Declared connections", show_lines=False)
+        conn_table.add_column("From")
+        conn_table.add_column("Port")
+        conn_table.add_column("")
+        conn_table.add_column("To")
+        conn_table.add_column("Port")
+        for c in plan.connections:
+            conn_table.add_row(c.from_id, c.from_port, "→", c.to_id, c.to_port)
+        console.print(conn_table)
+
+
 if __name__ == "__main__":
     app()
