@@ -1,5 +1,2 @@
-llm_backend = "vllm"
-llm_base_url = "https://REDACTED.example.invalid"
-llm_model = "/workspace/codeqwen-7b"
-llm_max_tokens = 4096
-llm_temperature = 0.1
+llm_backend = "anthropic"
+llm_model = "claude-sonnet-4-5"

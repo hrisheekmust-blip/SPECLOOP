@@ -242,6 +242,53 @@ This is a conversation no LLM can have. An LLM generates one answer with no awar
 
 ---
 
+## Application 7: Equivalence-Preserving Rewriting for PPA-Targeted Variant Generation
+
+### The problem with the current PPA residual approach
+
+Application 2 describes using the gap vector to guide LLM generation of missing modules. The same residual idea applies to PPA space — when a composition's PPA vector doesn't hit the user's target, you compute the PPA residual and use it to constrain the LLM to generate a faster/smaller variant of an existing block.
+
+The problem is that the LLM is generating a new module from scratch. Even with constraints derived from the PPA residual, the output is an LLM hallucination that needs a full SBY formal verification run to confirm it's still functionally correct. That's expensive, slow, and the repair loop often fails.
+
+### The better approach: rewrite rules
+
+Instead of generating a new variant from scratch, you apply mathematically proven transformation rules to the existing verified block. These rules are **equivalence-preserving by construction** — they change the structure of the RTL without changing its behavior.
+
+Examples of rewrite rules:
+- **Pipelining**: insert register stages along the critical path to increase clock frequency at the cost of latency cycles
+- **Retiming**: move existing registers across combinational logic boundaries to balance pipeline stages without adding new registers
+- **Resource sharing**: identify operations that don't occur in the same cycle and map them to a single shared resource, reducing area
+- **Loop unrolling**: replicate logic to process multiple data items per cycle, trading area for throughput
+
+Each of these rules has a formal proof that the output is behaviorally equivalent to the input. You don't need to re-run SBY on the core logic — equivalence is guaranteed by the rule. You only need to verify the composition wrapper, which is minimal.
+
+### How it connects to the PPA vector
+
+When the PPA residual says "this composition needs to be faster in the latency dimension," SpecLoop selects the rewrite rules that target latency — pipelining and retiming. It applies them to the bottleneck block (the one contributing most latency to the composition's PPA vector), generates the transformed variant, adds it to the library with its new PPA vector, and re-runs composition search.
+
+The gap shrinks. The library grows. The new variant is available for future compositions too.
+
+### Why this beats asking the LLM
+
+The LLM generating a variant has no formal guarantee of equivalence. It might introduce a subtle bug that SBY catches on the 3rd repair iteration, or doesn't catch at all if the assertion suite has gaps.
+
+Rewrite rules give you:
+- **Correctness by construction** — no SBY re-run on core logic
+- **Predictable PPA impact** — pipelining a module with N combinational stages increases fmax by approximately N× and latency by N cycles, deterministically
+- **A growing rule library** — every new rule you add increases the variant generation capability across all modules in the library
+
+### Related work
+- **ROVER** (Intel + Imperial College London, TCAD 2024) — formulates RTL optimization as e-graph rewriting, develops mixed-precision rewrite rules inspired by Intel engineers, formally verifies each rule preserves equivalence. Proves the approach works at industrial scale.
+- **ASPEN** (Cornell, MLCAD 2025) — combines LLM-driven rule generation with e-graph rewriting and real PPA feedback. Uses LLMs to *propose* new rewrite rules which are then formally verified before being added to the rule pool.
+
+### What's novel about SpecLoop's version
+
+ROVER and ASPEN apply rewriting to optimize a single module in isolation. Neither has a verified module library, vector spaces, or compositional search underneath. SpecLoop's version uses the PPA residual vector to *select which rewrite rules to apply and to which block* — the vector space guides the rewriting, not just a general "make it faster" heuristic. The result goes back into the library and enriches future composition searches.
+
+That specific combination — vector-guided equivalence-preserving rewriting feeding back into a formally verified compositional library — is unexplored in the literature.
+
+---
+
 ## Related Work and What Makes This Different
 
 ### What exists in the literature
@@ -263,6 +310,10 @@ This is a conversation no LLM can have. An LLM generates one answer with no awar
 **Hardware Circuit Embeddings:**
 - *HW2VEC* (2021) — embeds hardware circuits as graph vectors for Hardware Trojan detection. Proves that circuit structure can be meaningfully embedded in vector space. Does not use embeddings for composition or PPA optimization.
 
+**Equivalence-Preserving RTL Rewriting:**
+- *ROVER* (Intel + Imperial College London, TCAD 2024) — formulates RTL datapath optimization as e-graph rewriting with formally verified mixed-precision rewrite rules. Proves equivalence-preserving rewriting works at industrial scale.
+- *ASPEN* (Cornell, MLCAD 2025) — extends ROVER with LLM-driven rule proposal and real PPA feedback from EDA tools. Rules are formally verified before entering the pool.
+
 ### What nobody has done
 
 The specific combination that is novel:
@@ -273,8 +324,9 @@ The specific combination that is novel:
 4. **Residual vectors for gap detection** — identifying what's missing and using gap projections to guide generation of the missing module
 5. **PPA-aware composition selection** — among all functionally valid combinations, selecting the one optimal for a user-specified performance target
 6. **Self-expanding library** — every verified module enriches future searches, assertions, and PPA predictions
+7. **Vector-guided equivalence-preserving rewriting** — using PPA residual vectors to select which rewrite rules to apply to which block, feeding new variants back into the library. ROVER and ASPEN rewrite in isolation; SpecLoop rewrites in service of compositional search.
 
-The foundational techniques (embedding spaces, vector arithmetic, PPA prediction) are each proven independently over 10+ years. The application to formally verified hardware composition is unexplored.
+The foundational techniques (embedding spaces, vector arithmetic, PPA prediction, e-graph rewriting) are each proven independently over 10+ years. The application to formally verified hardware composition is unexplored.
 
 ---
 
@@ -309,10 +361,11 @@ The output is not just correct — it is the best possible correct implementatio
 3. PPA vector space + Application 6 (PPA-optimal composition) — buildable at ~100 modules with synthesis data
 4. Application 1 (vector arithmetic composition search) — buildable at ~200 modules
 5. Application 3 (interaction term assertion generation) — builds on 1 and 2
-6. Application 4 (coverage map) — nice to have, marketing/demo value
+6. Application 7 (equivalence-preserving rewriting) — builds on PPA vector space, requires a rewrite rule library; start with 3-4 rules (pipelining, retiming, resource sharing, loop unrolling)
+7. Application 4 (coverage map) — nice to have, marketing/demo value
 
 ---
 
 ## One-Line Summary
 
-**Represent every formally-verified module in two vector spaces — one for what it does, one for how fast and efficient it is — then use vector arithmetic to find the combination of proven components that is both functionally correct and performance-optimal for your specific application target, turning SpecLoop's library into a navigable map of verified hardware behavior with built-in performance intelligence.**
+**Represent every formally-verified module in two vector spaces — one for what it does, one for how fast and efficient it is — then use vector arithmetic to find the combination of proven components that is both functionally correct and performance-optimal for your specific application target, and when no combination is optimal, use the PPA residual vector to select equivalence-preserving rewrite rules that generate a targeted variant with guaranteed correctness, turning SpecLoop's library into a self-improving, navigable map of verified hardware behavior with built-in performance intelligence.**
