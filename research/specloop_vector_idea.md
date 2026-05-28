@@ -23,6 +23,47 @@ The assertion vector space represents the space of all possible behaviors a hard
 
 ---
 
+## The Dual Vector Space Architecture
+
+This is the core architectural idea that separates SpecLoop from any existing tool. Every module in the library lives simultaneously in **two separate vector spaces**:
+
+### Space 1: Functional Vector Space
+What the module **does** — its behavioral semantics. Built from port signatures, behavioral descriptions, and formally verified assertions. Searched using cosine similarity. Used to find modules that satisfy a functional requirement.
+
+### Space 2: PPA Vector Space
+How the module **performs** — its power, performance, and area characteristics. Built from structural features extracted during IR parsing plus lightweight ML prediction. Dimensions are:
+- **Latency**: critical path delay in normalized units (minimize → 0)
+- **Throughput**: data rate in normalized units (maximize → 1)
+- **Area**: gate equivalents in normalized units (minimize → 0)
+- **Power**: estimated switching power in normalized units (minimize → 0)
+
+The target point in PPA space is **application-dependent**, not fixed. For an HFT FPGA: `[0, 1, *, *]` — minimize latency, maximize throughput, area and power less critical. For a low-power IoT sensor: `[*, *, 0, 0]` — minimize area and power, throughput just needs to meet spec.
+
+### Why Two Separate Spaces?
+Combining behavioral and performance dimensions into one space causes interference — a fast module and a slow module that do the same thing might embed far apart even though they're functionally equivalent. Keeping the spaces separate means functional search is uncontaminated by performance characteristics, and performance optimization is uncontaminated by behavioral semantics.
+
+### How PPA Vectors Are Built
+When a module enters the library after formal verification, SpecLoop extracts structural features from its IR:
+- Number of always blocks, flip-flops, combinational logic depth
+- Port widths, parameter count, submodule count
+- Module type (sequential/combinational/FSM/memory)
+
+These features feed a lightweight predictor trained on modules in the library that have been synthesized. As the library grows, the predictor improves because it has more ground truth. No synthesis is required for every new module — prediction runs in milliseconds alongside the existing ingest pipeline.
+
+### The Composition Search with Dual Spaces
+When a user requests a design:
+1. Embed the request as a functional vector F
+2. Find all combinations of library modules whose functional vectors sum close to F (Application 1 below)
+3. Among the functionally valid combinations, map each to a PPA vector by summing component PPA vectors plus interface overhead estimate
+4. Find the combination whose PPA vector is closest to the user's performance target
+5. That combination is the optimal assembly — not just functionally correct but performance-optimal for this specific application
+
+**The key insight:** The same functionality can be implemented multiple ways with dramatically different PPA. A counter feeding a FIFO can be implemented with naive direct connection (functionally correct, hits timing at 100MHz) or with a registered interface and flow control (functionally correct, hits timing at 500MHz). Both pass the same assertions. The PPA vector space tells you which one to pick for your target.
+
+This is something no LLM can do. An LLM generates one implementation. SpecLoop enumerates all proven combinations and selects the Pareto-optimal one for your performance requirements.
+
+---
+
 ## Application 1: Compositional Search via Vector Arithmetic
 
 ### The current approach and its weakness
@@ -73,6 +114,9 @@ You embed that residual vector back into natural language (by finding the neares
 
 ### Why this is powerful
 Right now SpecLoop either finds a match or fails silently. This turns failures into actionable information. Instead of "no good match found for sub-function 'write controller'," you get "your library is missing a module that implements write-enable flow control based on a full flag — consider building and indexing one."
+
+### The gap vector also guides generation
+When a block doesn't exist in the library, the gap vector tells you what to generate. Instead of asking an LLM "write me a write controller" from scratch, you compute the projections of existing modules onto the gap vector's axes and use those projections as constraints. Existing modules that have strong projection onto the gap vector's axes contribute their behavioral patterns to the generation prompt. The LLM is generating a module that fills a mathematically defined behavioral gap, not hallucinating from scratch.
 
 ### Concrete example
 ```
@@ -162,21 +206,93 @@ This is already partially done via the RAG approach, but doing it with explicit 
 
 ---
 
-## Why This Is Novel
+## Application 6: PPA-Optimal Composition Selection
 
-Applying vector space arithmetic to hardware module composition for formal verification is not in the literature as of mid-2026. The adjacent work includes:
+### The core idea
+For any given functional target, multiple combinations of library modules may satisfy it. The naive approach picks the first functional match. The PPA-optimal approach enumerates all functional matches, maps each to its PPA vector, and selects the one closest to the user's performance target.
 
-- **HW2VEC** (2021) — embeds hardware circuits as graph vectors for Trojan detection, but not for composition or assertion generation
-- **STELLAR** (2026) — uses structural similarity for SVA retrieval, but doesn't do vector arithmetic or gap detection
-- **AssertionForge** (2025) — knowledge graph fusion of spec + RTL, different representation entirely
+This is the critical insight: **the most direct implementation is rarely the most efficient one.** A counter feeding a FIFO can be wired naively (works at 100MHz) or with a registered pipeline stage (works at 500MHz). Both are functionally identical. Only PPA-aware composition selection finds the 500MHz version automatically.
 
-The specific combination of:
-1. Formally-verified module behaviors as vectors
-2. Vector arithmetic for composition search
-3. Residual vectors for gap detection
-4. Interaction terms for targeted assertion generation
+### The performance target vector
+The user specifies a performance intent when making a composition request:
 
-...is unexplored. The foundation (embedding spaces, vector arithmetic) is proven at 10+ years of NLP research. The application to hardware formal verification is new.
+```
+specloop compose "build me a streaming data processor" --target latency=min throughput=max
+```
+
+This translates to a target PPA vector: `[0, 1, *, *]` — minimize latency, maximize throughput, area and power unconstrained.
+
+For a different application:
+```
+specloop compose "build me a sensor aggregator" --target power=min area=min
+```
+
+Target PPA vector: `[*, *, 0, 0]` — minimize area and power, latency just needs to meet spec.
+
+### The Pareto frontier output
+When no single combination hits the target exactly, SpecLoop returns the Pareto frontier — the set of compositions where you can't improve one dimension without worsening another. The user sees:
+
+```
+Composition Option A: latency=0.3ns, throughput=0.9, area=450GE  ← best latency
+Composition Option B: latency=0.5ns, throughput=0.95, area=380GE ← best area
+Composition Option C: latency=0.4ns, throughput=0.92, area=410GE ← balanced
+```
+
+This is a conversation no LLM can have. An LLM generates one answer with no awareness of the tradeoff space.
+
+---
+
+## Related Work and What Makes This Different
+
+### What exists in the literature
+
+**PPA Prediction from RTL Embeddings:**
+- *FastPASE* (ISQED 2024) — encodes RTL netlists as dataflow graphs, predicts PPA 16-155x faster than synthesis with ~13% error using graph convolutional networks. Proves PPA prediction from structural features is accurate enough to be useful.
+- *MasterRTL / Transferable Pre-synthesis PPA Estimation* (TCAD 2024) — module-level PPA prediction using simple operator graphs. 98% accuracy on timing, 90% on power across 147 designs.
+- *DeepRTL2* (ACL 2025) — first model unifying generation and embedding tasks for RTL. Uses XGBoost on RTL embeddings to predict area and delay. Demonstrates that RTL code embeddings carry enough structural signal for PPA regression.
+
+**RTL Embeddings for Search:**
+- *DeepRTL* (ICLR 2025) — outperforms GPT-4 on Verilog understanding using curriculum learning. Uses embedding similarity for code search and functionality equivalence checking.
+- *STELLAR* (2026) — represents RTL blocks as AST structural fingerprints, retrieves structurally similar (RTL, SVA) pairs to guide assertion generation. Closest to SpecLoop's RAG approach but uses structural similarity not behavioral embedding arithmetic.
+
+**Formal Verification + LLMs:**
+- *AssertLLM, AssertionForge, SANGAM* — LLM-based assertion generation from spec documents. All require human-written specifications as input. None build a self-expanding library.
+- *AutoSVA* (Princeton) — automatically generates SVA testbenches for module interactions, focused on deadlock/livelock detection. Not compositional.
+- *VERT dataset* (2025) — large-scale SVA dataset for fine-tuning LLMs on hardware verification. Demonstrates that fine-tuning dramatically improves assertion quality — the same insight behind SpecLoop's training flywheel.
+
+**Hardware Circuit Embeddings:**
+- *HW2VEC* (2021) — embeds hardware circuits as graph vectors for Hardware Trojan detection. Proves that circuit structure can be meaningfully embedded in vector space. Does not use embeddings for composition or PPA optimization.
+
+### What nobody has done
+
+The specific combination that is novel:
+
+1. **Formally verified module behaviors as vectors** — not just code similarity, but behaviorally grounded by mathematical proof
+2. **Dual vector spaces** — separate functional and PPA spaces that don't interfere with each other
+3. **Vector arithmetic for composition search** — tip-to-tail addition to find optimal module combinations
+4. **Residual vectors for gap detection** — identifying what's missing and using gap projections to guide generation of the missing module
+5. **PPA-aware composition selection** — among all functionally valid combinations, selecting the one optimal for a user-specified performance target
+6. **Self-expanding library** — every verified module enriches future searches, assertions, and PPA predictions
+
+The foundational techniques (embedding spaces, vector arithmetic, PPA prediction) are each proven independently over 10+ years. The application to formally verified hardware composition is unexplored.
+
+---
+
+## Why This Beats a Well-Trained RTL LLM
+
+A state-of-the-art RTL LLM trained on millions of lines of Verilog (ChipSeek, CodeV, DeepRTL) generates one implementation per request. It has no awareness of:
+- Whether its output is formally correct
+- What the output's timing, area, or power will be
+- Whether a different implementation of the same functionality would perform better
+- What the tradeoff space looks like
+
+SpecLoop with dual vector spaces:
+- Generates only proven-correct implementations (formally verified)
+- Knows the PPA of every component before generating a line of wrapper code
+- Enumerates all valid compositions and selects the performance-optimal one
+- Shows the user the tradeoff frontier when there's no perfect answer
+
+The output is not just correct — it is the best possible correct implementation for your specific performance target, assembled from proven components, with mathematical guarantees.
 
 ---
 
@@ -185,17 +301,18 @@ The specific combination of:
 **Prerequisites:**
 - Library size: 200+ formally verified modules minimum for the geometry to be meaningful
 - Embedding quality validation: verify that similar modules actually cluster correctly (manual inspection of UMAP plot)
-- Baseline compositional search working well (current approach)
+- PPA characterization: synthesize a representative subset of library modules to train the PPA predictor
 
 **Suggested implementation order:**
 1. Application 5 (assertion transfer, weighted RAG) — buildable now, low risk, immediate quality improvement
 2. Application 2 (gap detection) — buildable at ~50 modules, high user value
-3. Application 1 (vector arithmetic composition search) — buildable at ~200 modules
-4. Application 3 (interaction term assertion generation) — builds on 1 and 2
-5. Application 4 (coverage map) — nice to have, marketing/demo value
+3. PPA vector space + Application 6 (PPA-optimal composition) — buildable at ~100 modules with synthesis data
+4. Application 1 (vector arithmetic composition search) — buildable at ~200 modules
+5. Application 3 (interaction term assertion generation) — builds on 1 and 2
+6. Application 4 (coverage map) — nice to have, marketing/demo value
 
 ---
 
 ## One-Line Summary
 
-**Represent every formally-verified module and every proven assertion as a point in a high-dimensional behavioral space, then use vector arithmetic in that space to search for compositions, detect library gaps, target assertion generation, and track coverage — turning SpecLoop's library from a database into a navigable map of verified hardware behavior.**
+**Represent every formally-verified module in two vector spaces — one for what it does, one for how fast and efficient it is — then use vector arithmetic to find the combination of proven components that is both functionally correct and performance-optimal for your specific application target, turning SpecLoop's library into a navigable map of verified hardware behavior with built-in performance intelligence.**
