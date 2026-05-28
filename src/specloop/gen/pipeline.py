@@ -154,6 +154,8 @@ class AssertionPipeline:
         raw = self._client.generate(system, user)
         data = _parse_json(raw, "property_hardening")
         bind_sv = _sanitize_sv(data.get("bind_module", ""))
+        bind_sv = _sanitize_bind_ports(bind_sv)
+        bind_sv = _hoist_wires_from_always(bind_sv)
         index_raw = data.get("assertion_index", [])
         index = []
         for entry in index_raw:
@@ -327,6 +329,60 @@ def _merge_bind_results(
 def _sanitize_sv(sv: str) -> str:
     """Replace non-ASCII characters with underscores (SV identifiers must be ASCII)."""
     return re.sub(r'[^\x00-\x7F]', '_', sv)
+
+
+def _hoist_wires_from_always(sv: str) -> str:
+    """Move wire/assign declarations from inside always blocks to module level.
+
+    A wire or assign inside a procedural block is illegal SystemVerilog and
+    causes Yosys elaboration to silently fail (returning UNKNOWN at ~0s).
+    Hoisting them to before the first always block preserves semantics because
+    module-level wires are in scope throughout the entire module.
+    """
+    first_always = re.search(r'\balways\s*@', sv)
+    if not first_always:
+        return sv
+
+    split_pos = first_always.start()
+    before = sv[:split_pos]
+    after = sv[split_pos:]
+
+    # Match lines whose first non-whitespace token is `wire` or `assign`
+    _WIRE_RE = re.compile(r'^[ \t]*(?:wire|assign)\b[^\n]*\n?', re.MULTILINE)
+
+    hoisted: list[str] = []
+
+    def _extract(m: re.Match) -> str:
+        hoisted.append(m.group(0).rstrip('\n') + '\n')
+        return ''
+
+    after_cleaned = _WIRE_RE.sub(_extract, after)
+
+    if not hoisted:
+        return sv
+
+    return before + ''.join(hoisted) + '\n' + after_cleaned
+
+
+def _sanitize_bind_ports(sv: str) -> str:
+    """Force all spec module port declarations to `input`.
+
+    In a bind module the spec only observes DUT signals — it never drives them.
+    Any `output` or `inout` in the port list produces undriven-output elaboration
+    errors and causes the solver to return UNKNOWN instead of proving assertions.
+
+    The substitution is restricted to the port list (text before the first `);`)
+    so that internal wire/reg declarations inside the module body are untouched.
+    """
+    close = sv.find(");")
+    if close == -1:
+        return sv
+    port_section = sv[:close]
+    # Replace output/inout (with optional whitespace) before logic/reg keywords
+    port_section = re.sub(r'\b(?:output|inout)(\s+(?:logic|reg)\b)', r'input\1', port_section)
+    # Also catch bare `output` / `inout` not followed by logic/reg (e.g. `output [N:0]`)
+    port_section = re.sub(r'\b(?:output|inout)(\s)', r'input\1', port_section)
+    return port_section + sv[close:]
 
 
 def _parse_json(raw: str, stage: str) -> dict:

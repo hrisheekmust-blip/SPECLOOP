@@ -31,6 +31,9 @@ RULES:
   no `|->`, no `|=>`, no `##N`, no `disable iff`
 - No `function`, no `task`, no `class` — forbidden, Yosys cannot elaborate them in
   bind modules. Express all decode logic as `wire`/`assign` statements instead.
+- `wire` and `assign` declarations must be at MODULE LEVEL (between the module port list
+  and the first `always` block) — never inside an `always` block. A `wire` inside a
+  procedural block is illegal SV and causes Yosys elaboration failure.
 - Name every assert label with `ap_` prefix
 
 Emit a JSON object with fields:
@@ -109,7 +112,8 @@ Timing:
 {% endif %}
 ## Output Requirements
 - Module name: `{{ ir.module }}_spec`; bind line: `bind {{ ir.module }} {{ ir.module }}_spec spec_inst(.*);`
-- Ports must match the DUT exactly (same names, widths, directions)
+- CRITICAL: In the spec module port list, ALL ports must be declared as `input logic`, regardless of their direction in the DUT. The spec only observes signals — it never drives them. Even if the DUT declares `gnt_o` as an `output`, the spec must declare it as `input logic gnt_o`. `output logic` or `inout logic` in a spec port list is a hard error.
+- Port names and widths must match the DUT exactly; only directions change (all become `input`)
 - All assertions inside `always @(posedge clk) begin ... end` blocks
 - Use `assert(<expr>)` only — never `assert property(...)` or any SVA property syntax
 - No `function`, `task`, or `class` declarations anywhere in the module — use `wire`/`assign` for decode logic

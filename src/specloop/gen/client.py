@@ -119,7 +119,6 @@ class VLLMClient(LLMClient):
         return self._model
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
-        print(f"[VLLMClient] base_url={self._client.base_url!r}", flush=True)
         response = self._client.chat.completions.create(
             model=self._model,
             max_tokens=self._max_tokens,

@@ -68,6 +68,11 @@ class SBYBackend(FormalBackend):
         # preventing pre-existing RTL asserts from becoming untracked formal properties.
         rtl_files = _unique_paths([rtl_path] + deps)
         bind_abs = bind_path.resolve()
+
+        from specloop.config import SpecloopConfig
+        _cfg = SpecloopConfig()
+        include_dirs = [d.resolve() for d in _cfg.rtl_include_dirs] if _cfg.rtl_include_dirs else []
+
         sby_content = _render_sby_config(
             module_name=module_name,
             rtl_files=rtl_files,
@@ -75,6 +80,7 @@ class SBYBackend(FormalBackend):
             mode=mode,
             depth=self._depth,
             solver=self._solver,
+            include_dirs=include_dirs,
         )
         sby_file = work_dir / f"{module_name}.sby"
         sby_file.write_text(sby_content, encoding="utf-8")
@@ -153,6 +159,7 @@ def _render_sby_config(
     mode: str,
     depth: int,
     solver: str,
+    include_dirs: list[Path] | None = None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(_PROMPTS_DIR)),
@@ -167,6 +174,7 @@ def _render_sby_config(
         mode=mode,
         depth=depth,
         solver=solver,
+        include_dirs=include_dirs or [],
     )
 
 

@@ -15,6 +15,7 @@ RULES:
 - `assert(<expr>)` only — never `assert property(...)`, never `property`, never `sequence`
 - No `default clocking`, no `|->`, no `|=>`, no `##N`, no `disable iff`
 - No `function`, `task`, or `class` declarations — use `wire`/`assign` for decode logic instead
+- `wire` and `assign` must be at MODULE LEVEL (before the first `always` block), never inside an `always` block — a `wire` inside a procedural block is illegal SV and causes Yosys elaboration failure
 - Use `$past(<signal>)` for one-cycle-ago values; guard with `if ($past(1'b1))` on cycle 1
 - Use `$rose()` / `$fell()` for edge detection
 - Fix only the failing assertions; preserve passing ones verbatim

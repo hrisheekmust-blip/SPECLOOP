@@ -12,7 +12,14 @@ from pathlib import Path
 
 from specloop.formal.backend import FormalBackend, FormalResult
 from specloop.gen.client import LLMClient
-from specloop.gen.pipeline import _parse_json, _sanitize_sv, _WRAPPER_SUFFIX, _SEP
+from specloop.gen.pipeline import (
+    _hoist_wires_from_always,
+    _parse_json,
+    _sanitize_bind_ports,
+    _sanitize_sv,
+    _SEP,
+    _WRAPPER_SUFFIX,
+)
 from specloop.gen.schema import BindResult
 from specloop.ir.schema import ModuleIR
 from specloop.training.schema import AssertionEntry, ProofSummary, ProvenPair, RepairStep
@@ -102,7 +109,9 @@ class RepairLoop:
             raw = self._client.generate(system, user)
             data = _parse_json(raw, f"repair_iter_{iteration}")
 
-            bind_sv = _sanitize_sv(data.get("bind_module", ""))  # fix #5
+            bind_sv = _sanitize_sv(data.get("bind_module", ""))
+            bind_sv = _sanitize_bind_ports(bind_sv)
+            bind_sv = _hoist_wires_from_always(bind_sv)
             if not bind_sv:
                 log.warning("Repair iter %d: LLM returned no bind_module", iteration)
                 repair_steps.append(RepairStep(
