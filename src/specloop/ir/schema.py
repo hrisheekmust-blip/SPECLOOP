@@ -29,6 +29,10 @@ class AlwaysBlock(BaseModel):
     kind: Literal["always_ff", "always_comb", "always_latch", "always"]
     sensitivity: list[str] = []
     has_async_reset: bool = False
+    start_line: int = 0          # source line where this block begins (1-based)
+    end_line: int = 0            # source line where this block ends (inclusive)
+    signals_written: list[str] = []  # signal names on LHS of assignments
+    signals_read: list[str] = []     # signal names on RHS / in conditions
 
 
 class ModuleIR(BaseModel):

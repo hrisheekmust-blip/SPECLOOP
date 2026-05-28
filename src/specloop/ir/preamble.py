@@ -20,12 +20,28 @@ class PreambleCapsule:
     default_nettype: str = "wire"
 
     @classmethod
-    def from_file(cls, path: Path) -> "PreambleCapsule":
+    def from_file(
+        cls,
+        path: Path,
+        base_defines: dict[str, str] | None = None,
+    ) -> "PreambleCapsule":
+        """Parse preamble from *path*.
+
+        *base_defines* are project-level defines (from specloop.toml
+        ``define_files``) that should be visible to this file.  The file's own
+        ``\\`define`` directives take precedence over *base_defines* on conflict.
+        """
         try:
             text = path.read_text(errors="replace")
         except OSError:
-            return cls()
-        return cls.from_text(text)
+            cap = cls()
+            if base_defines:
+                cap.defines = dict(base_defines)
+            return cap
+        cap = cls.from_text(text)
+        if base_defines:
+            cap.defines = {**base_defines, **cap.defines}
+        return cap
 
     @classmethod
     def from_text(cls, text: str) -> "PreambleCapsule":

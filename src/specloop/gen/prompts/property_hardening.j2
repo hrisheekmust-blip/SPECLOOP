@@ -59,6 +59,18 @@ File: {{ ir.file }}
 {% endfor %}
 {% endif %}
 
+{% if few_shot_examples %}
+### Few-Shot Examples (proven assertions from structurally similar modules — match this style)
+{% for ex in few_shot_examples %}
+#### Example: {{ ex.module_name }}
+{% if ex.assertion_summary %}Summary: {{ ex.assertion_summary | join("; ") }}{% endif %}
+```systemverilog
+{{ ex.bind_module_sv }}
+```
+---
+{% endfor %}
+
+{% endif %}
 ### Property Candidates
 {% for c in candidates %}
 {{ loop.index }}. **{{ c.name }}** [{{ c.category }}]
@@ -75,6 +87,24 @@ File: {{ ir.file }}
 ```systemverilog
 {{ rtl_source }}
 ```
+
+{% endif %}
+{% if spec %}
+### Module Behavioral Spec (authoritative — harden assertions to match these contracts)
+Clock: {{ spec.clock_description }}
+Reset: {{ spec.reset_description }}
+{% if spec.interface_contracts %}
+Interface contracts:
+{% for ic in spec.interface_contracts %}
+  - {{ ic }}
+{% endfor %}
+{% endif %}
+{% if spec.timing_relationships %}
+Timing:
+{% for tr in spec.timing_relationships %}
+  - {{ tr }}
+{% endfor %}
+{% endif %}
 
 {% endif %}
 ## Output Requirements

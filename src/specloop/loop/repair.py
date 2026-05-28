@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from pathlib import Path
 
 from specloop.formal.backend import FormalBackend, FormalResult
@@ -82,7 +83,7 @@ class RepairLoop:
             failure_type = _classify_failure(current_formal)
 
             # Build CEX description
-            cex_desc = _build_cex_description(current_formal, failure_type)
+            cex_desc = _build_cex_description(current_formal, failure_type, ir)
 
             # Call LLM for repair
             system, user = _render_repair_prompt(
@@ -238,28 +239,62 @@ def _classify_failure(fr: FormalResult) -> str:
     return mapping.get(fr.status, "FormalFail")
 
 
-def _build_cex_description(fr: FormalResult, failure_type: str) -> str:
+def _diagnose_compile_error(log_tail: str, ir: ModuleIR) -> str:
+    """Classify each signal name in compile errors as a real port/signal or hallucinated."""
+    error_lines = [ln for ln in log_tail.splitlines() if "error" in ln.lower()][:20]
+
+    # Extract quoted/single-quoted identifiers — covers Yosys and slang error patterns:
+    # "Unknown identifier 'foo'", "Wire 'foo' is not defined", "use of undeclared identifier 'foo'"
+    candidates: set[str] = set()
+    _IDENT_RE = re.compile(r"['\"]([A-Za-z_]\w*)['\"]")
+    for ln in error_lines:
+        candidates.update(_IDENT_RE.findall(ln))
+
+    known_ports = {p.name: p for p in ir.ports}
+    # signals_written/signals_read are populated by Change 2; degrade to empty if absent
+    known_signals: set[str] = set()
+    for block in ir.always_blocks:
+        known_signals.update(getattr(block, "signals_written", []))
+        known_signals.update(getattr(block, "signals_read", []))
+
+    diag_lines = ["Compile error diagnosis:"]
+    for name in sorted(candidates):
+        if name in known_ports:
+            p = known_ports[name]
+            width_str = f" [{p.width - 1}:0]" if p.width > 1 else ""
+            diag_lines.append(
+                f"  '{name}' EXISTS as port: {p.direction} logic{width_str} {p.name}"
+            )
+        elif name in known_signals:
+            diag_lines.append(f"  '{name}' EXISTS as internal signal (not a top-level port)")
+        elif len(name) > 2 and not name.isdigit():
+            diag_lines.append(
+                f"  '{name}' NOT FOUND in module IR — likely a hallucinated name, do not use it"
+            )
+
+    diag_lines.append("\nRaw error lines:")
+    diag_lines.extend(f"  {ln}" for ln in error_lines[:10])
+    return "\n".join(diag_lines)
+
+
+def _build_cex_description(fr: FormalResult, failure_type: str, ir: ModuleIR) -> str:
     if failure_type == "CompileError":
-        # Use log_tail as the error message
-        error_lines = [
-            ln for ln in fr.log_tail.splitlines()
-            if "error" in ln.lower() or "ERROR" in ln
-        ]
-        if error_lines:
-            return "Compiler errors:\n" + "\n".join(f"  {ln}" for ln in error_lines[:20])
-        return "Compilation failed. See log:\n" + fr.log_tail[-1000:]
+        return _diagnose_compile_error(fr.log_tail, ir)
 
-    if fr.counterexample_nl:
-        return fr.counterexample_nl
+    if failure_type == "FormalFail":
+        parts: list[str] = []
+        failed = [a for a in fr.assertions if a.status == "fail"]
+        if failed:
+            parts.append("Failed assertions:")
+            for a in failed[:5]:
+                parts.append(f"  - {a.name}: {a.message or 'assertion violated'}")
+        if fr.counterexample_nl:
+            parts.append("\nCounterexample trace (exact signal values that triggered the violation):")
+            parts.append(fr.counterexample_nl)
+        return "\n".join(parts) if parts else "Formal verification failed."
 
-    # Fallback: describe from structured assertion results
-    lines = []
-    for a in fr.failed_assertions[:10]:
-        lines.append(f"- {a.name}: {a.message or 'assertion violated'}")
-    if lines:
-        return "Failed assertions:\n" + "\n".join(lines)
-
-    return "Formal verification failed. No counterexample trace available."
+    # Timeout / Unknown — return raw log tail
+    return fr.log_tail[-1000:] if fr.log_tail else "No diagnostic information available."
 
 
 def _render_repair_prompt(

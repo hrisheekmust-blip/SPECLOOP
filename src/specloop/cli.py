@@ -59,8 +59,19 @@ def ingest(
     work = out or _work_dir()
     work.mkdir(parents=True, exist_ok=True)
 
+    from specloop.config import SpecloopConfig
+    cfg = SpecloopConfig()
+    inc_dirs = cfg.rtl_include_dirs or None
+    def_files = cfg.rtl_define_files or None
+    pkg_files = cfg.rtl_package_files or None
+
     with console.status(f"[bold]Parsing {path}…[/bold]"):
-        irs = extract_modules(path)
+        irs = extract_modules(
+            path,
+            include_dirs=inc_dirs,
+            define_files=def_files,
+            package_files=pkg_files,
+        )
 
     if not irs:
         console.print("[yellow]No modules found.[/yellow]")

@@ -74,4 +74,28 @@ Generate SVA property candidates for module '{{ ir.module }}' (type: {{ ir.modul
 {{ rtl_source }}
 ```
 {% endif %}
+
+{% if spec %}
+## Module Behavioral Spec (pre-computed — treat as authoritative)
+Clock: {{ spec.clock_description }}
+Reset: {{ spec.reset_description }}
+{% if spec.state_behavior %}
+State/protocol behavior:
+{% for sb in spec.state_behavior %}
+  - {{ sb }}
+{% endfor %}
+{% endif %}
+{% if spec.interface_contracts %}
+Interface contracts (these are your primary property targets):
+{% for ic in spec.interface_contracts %}
+  - {{ ic }}
+{% endfor %}
+{% endif %}
+{% if spec.timing_relationships %}
+Timing relationships (use these for temporal properties):
+{% for tr in spec.timing_relationships %}
+  - {{ tr }}
+{% endfor %}
+{% endif %}
+{% endif %}
 {% endset %}

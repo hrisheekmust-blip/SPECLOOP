@@ -66,20 +66,31 @@ Iteration: {{ iteration }}/{{ max_iterations }}
 {% endif %}
 ## Fix Instructions
 {% if failure_type == "CompileError" %}
-The bind module has a compile error. Fix ALL syntax issues:
+The bind module has a compile error. The diagnosis above classifies every flagged identifier:
+- **EXISTS as port**: use that exact name and direction — do not rename it
+- **EXISTS as internal signal**: it is not a port; reference it only if the bind module can legally access it
+- **NOT FOUND in module IR**: this is a hallucinated name — replace it with a real port from the "Module Ports" list above
+
+Additional syntax rules to check:
 - Replace any `assert property(...)` with `assert(...)` inside an always block
 - Remove any `property`, `sequence`, `default clocking`, `disable iff`, `|->`, `|=>`
 - Remove any `function`, `task`, or `class` declarations; rewrite as `wire`/`assign`
 - Ensure the always block is `always @(posedge clk) begin ... end`
-- Ports must match the DUT exactly
-{% else %}
-Fix the failing assertions by examining the counterexample trace:
+- Ports in the bind module spec header must match the DUT ports exactly
+{% elif failure_type == "FormalFail" %}
+The counterexample trace above shows the exact signal values that triggered the violation.
+Fix the failing assertions using that trace:
 - Read the signal values at each step to understand what the DUT actually does
 - Correct the guard condition or the expected expression — the property logic, the
   timing (off-by-one in $past), or a missing qualifying condition
 - Use `$past(<sig>)` for one-cycle-ago values with a `$past(1'b1)` validity guard
-- Do NOT weaken assertions to make them vacuously true
+- Do NOT weaken assertions to make them vacuously true; do NOT remove assertions
 - Do NOT introduce SVA property syntax
+{% else %}
+Fix the failing assertions. Check:
+- Signal names match the module ports exactly
+- Always blocks use `always @(posedge clk) begin ... end`
+- No SVA property syntax (`property`, `|->`, `##N`, etc.)
 {% endif %}
 
 Emit the full corrected JSON as the ONLY output.

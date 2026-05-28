@@ -7,6 +7,17 @@ from pydantic import BaseModel
 from specloop.training.schema import AssertionEntry
 
 
+class ModuleSpec(BaseModel):
+    """Stage 0 output: structured behavioral spec anchoring downstream generation."""
+    module_type: str = ""
+    clock_description: str = ""
+    reset_description: str = ""
+    port_descriptions: list[str] = []
+    state_behavior: list[str] = []      # state transitions (FSMs) or R/W protocol (memories)
+    interface_contracts: list[str] = [] # invariants and protocol constraints
+    timing_relationships: list[str] = []
+
+
 class BehaviorExtraction(BaseModel):
     """Stage 1 output: structured behavioral description of a module."""
     clock_ports: list[str] = []
@@ -37,5 +48,6 @@ class BindResult(BaseModel):
     bind_module_sv: str
     assertion_index: list[AssertionEntry] = []
     model_id: str = ""
+    stage0: Optional[ModuleSpec] = None
     stage1: Optional[BehaviorExtraction] = None
     stage2: Optional[PropertySynthesis] = None

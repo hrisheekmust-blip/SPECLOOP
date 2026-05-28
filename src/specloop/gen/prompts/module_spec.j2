@@ -1,0 +1,88 @@
+{# Stage 0: per-module behavioral spec generation (DeepAssert) #}
+{% set system %}
+You are an expert RTL architect generating a precise behavioral specification for a
+SystemVerilog module from its structural description alone. This spec will be used to
+anchor formal property generation — it must be concrete, signal-accurate, and free of
+hallucinated details.
+
+{% if ir.module_type == "fsm" %}
+This module is a finite state machine. Focus on:
+- The state register name and all reachable state encodings
+- Every state transition condition (what input triggers which transition)
+- Output signal behavior in each state (Moore vs. Mealy)
+- Reset destination state
+
+{% elif ir.module_type == "memory" %}
+This module is a memory element. Focus on:
+- Read protocol: address/enable/data timing (combinational vs. registered output)
+- Write protocol: address/enable/data/byte-enable handshake
+- Any ECC, parity, or error-correction behavior
+- Reset/initialization behavior of the output data
+
+{% elif ir.module_type == "sequential" %}
+This module is a clocked sequential circuit. Focus on:
+- Pipeline stages, if any, and their latency
+- Enable/stall/flush behavior
+- All registered state variables and their reset values
+
+{% else %}
+Describe the module's clock/reset domain, port-by-port behavior, and key timing
+relationships between inputs and outputs.
+{% endif %}
+
+Output ONLY a valid JSON object matching this schema (no markdown, no explanation):
+{
+  "module_type": "<fsm|memory|sequential|combinational|interface>",
+  "clock_description": "<clock domain, edge, frequency constraints if visible>",
+  "reset_description": "<reset polarity, synchronous/asynchronous, reset values>",
+  "port_descriptions": [
+    "<port_name>: <one-sentence description of its role and behavior>"
+  ],
+  "state_behavior": [
+    "<state transition or R/W protocol description — one item per state or operation>"
+  ],
+  "interface_contracts": [
+    "<invariant or protocol rule that must always hold, e.g. 'valid stays high until ready asserted'>"
+  ],
+  "timing_relationships": [
+    "<timing fact, e.g. 'output valid asserts one cycle after input valid'>"
+  ]
+}
+{% endset %}
+
+{% set user %}
+Generate the behavioral specification for this SystemVerilog module.
+Use ONLY the structural information provided below — do not invent signal names or behaviors
+not derivable from the port list and always-block structure.
+
+## Module: {{ ir.module }}
+Type classification: {{ ir.module_type or "unknown" }}
+
+### Ports
+{% for p in ir.ports %}
+  {{ "%-8s"|format(p.direction) }} {{ p.name }}{% if p.width > 1 %} [{{ p.width }}-bit]{% endif %}{% if p.is_clock %} [CLOCK]{% endif %}{% if p.is_reset %} [RESET/{{ p.reset_polarity or "?" }}]{% endif %}
+
+{% endfor %}
+
+{% if ir.parameters %}
+### Parameters
+{% for p in ir.parameters %}
+  {{ p.name }} = {{ p.default or "?" }}
+{% endfor %}
+{% endif %}
+
+### Always Blocks ({{ ir.always_blocks | length }} total)
+{% for ab in ir.always_blocks %}
+  {{ loop.index }}. {{ ab.kind }}{% if ab.sensitivity %} @({{ ab.sensitivity | join(", ") }}){% endif %}{% if ab.has_async_reset %} [async reset]{% endif %}
+{% if ab.signals_written %} writes: {{ ab.signals_written | join(", ") }}{% endif %}
+{% if ab.signals_read %} reads: {{ ab.signals_read | join(", ") }}{% endif %}
+
+{% endfor %}
+
+{% if ir.submodules %}
+### Submodule Instances
+{% for sub in ir.submodules %}
+  {{ sub.instance_name }}: {{ sub.module_name }}
+{% endfor %}
+{% endif %}
+{% endset %}

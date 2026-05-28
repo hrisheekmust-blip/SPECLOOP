@@ -23,6 +23,11 @@ class SpecloopConfig(BaseSettings):
     vendor_blackboxes_dir: Path = Field(default=Path("vendor_blackboxes"))
     max_file_size_kb: int = Field(default=2048)
 
+    # Cross-file RTL dependencies (industrial designs with packages / header macros)
+    rtl_include_dirs: list[Path] = Field(default_factory=list)
+    rtl_define_files: list[Path] = Field(default_factory=list)
+    rtl_package_files: list[Path] = Field(default_factory=list)
+
     # Training data collection
     training_log: Path = Field(default=Path("work/training_data.jsonl"))
     training_min_confidence: float = Field(default=0.0, ge=0.0, le=1.0)

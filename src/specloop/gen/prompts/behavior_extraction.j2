@@ -68,4 +68,34 @@ Type classification: {{ ir.module_type or "unknown" }}
 {{ rtl_source }}
 ```
 {% endif %}
+
+{% if spec %}
+### Module Behavioral Spec (pre-computed — use as ground truth)
+Clock: {{ spec.clock_description }}
+Reset: {{ spec.reset_description }}
+{% if spec.port_descriptions %}
+Port roles:
+{% for pd in spec.port_descriptions %}
+  - {{ pd }}
+{% endfor %}
+{% endif %}
+{% if spec.state_behavior %}
+State/protocol behavior:
+{% for sb in spec.state_behavior %}
+  - {{ sb }}
+{% endfor %}
+{% endif %}
+{% if spec.interface_contracts %}
+Interface contracts:
+{% for ic in spec.interface_contracts %}
+  - {{ ic }}
+{% endfor %}
+{% endif %}
+{% if spec.timing_relationships %}
+Timing:
+{% for tr in spec.timing_relationships %}
+  - {{ tr }}
+{% endfor %}
+{% endif %}
+{% endif %}
 {% endset %}
