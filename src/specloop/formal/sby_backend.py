@@ -466,16 +466,22 @@ def _infer_port_width(expr: str, parent_widths: dict[str, str]) -> str:
 def _write_stubs(
     missing: list[str], work_dir: Path, parent_rtl: Path
 ) -> list[Path]:
-    """Write `(* blackbox *)` stub .sv files for each missing module.
+    """Write passthrough stub .sv files for each missing module.
 
-    Parses `parent_rtl` to recover the actual instantiation: the parameter
-    names from `#(...)` and the port names from `(.name(expr), ...)`. Port
+    Parses `parent_rtl` to recover the actual instantiation: parameter
+    names from `#(...)` and port names from `(.name(expr), ...)`. Port
     direction is inferred from the OpenTitan `_i` / `_o` suffix convention
     (default input). Port width is inferred from the connected expression
-    when it's a bare signal declared in the parent.
+    when it's a bare signal declared in the parent, or `{N{...}}`.
 
-    Falls back to a permissive `(.*)` wildcard stub if the instantiation
-    can't be located.
+    Body: each output is `assign`-driven by the bitwise-AND of all input
+    ports that share its width. When no compatible inputs exist (or widths
+    are unknown), outputs are tied to `'0`. The stub has no `(* blackbox *)`
+    attribute — Yosys would otherwise refuse to elaborate parameterized
+    instances against a blackbox.
+
+    Falls back to an empty module (no body, no ports) when the instantiation
+    cannot be located in the parent.
     """
     stub_dir = work_dir / "_stubs"
     stub_dir.mkdir(parents=True, exist_ok=True)
@@ -489,10 +495,10 @@ def _write_stubs(
         spec = _extract_instantiation(parent_text, name)
 
         if spec is None:
-            # No instantiation found — fall back to wildcard.
             path.write_text(
-                f"// Auto-generated permissive blackbox stub for {name}.\n"
-                f"(* blackbox *)\nmodule {name} (.*);\nendmodule\n",
+                f"// Auto-generated empty stub for {name} "
+                f"(no instantiation found in {parent_rtl.name}).\n"
+                f"module {name};\nendmodule\n",
                 encoding="utf-8",
             )
             out.append(path.resolve())
@@ -500,29 +506,51 @@ def _write_stubs(
 
         params, ports = spec
 
-        # Parameter declarations: we know names but not types/defaults — use
-        # `parameter <name> = 1` which Yosys accepts and which the parent's
-        # override will replace at elaboration.
         if params:
             param_lines = ",\n  ".join(f"parameter {p} = 1" for p in params)
             param_block = f" #(\n  {param_lines}\n)"
         else:
             param_block = ""
 
-        port_lines: list[str] = []
+        # Resolve direction + width per port
+        port_info: list[tuple[str, str, str]] = []  # (direction, width, name)
         for pname, expr in ports:
             direction = "output" if pname.endswith("_o") else "input"
             width = _infer_port_width(expr.strip(), parent_widths)
-            width_str = f"[{width}] " if width else ""
-            port_lines.append(f"  {direction} logic {width_str}{pname}")
-        port_block = ",\n".join(port_lines) if port_lines else ""
+            port_info.append((direction, width, pname))
+
+        port_lines = [
+            f"  {direction} logic {'[' + width + '] ' if width else ''}{pname}"
+            for (direction, width, pname) in port_info
+        ]
+        port_block = ",\n".join(port_lines)
+
+        # Build passthrough body: each output = AND of inputs sharing its width.
+        # If widths don't match or are unknown, tie to '0 to keep elaboration
+        # well-formed.
+        body_lines: list[str] = []
+        for direction, width, pname in port_info:
+            if direction != "output":
+                continue
+            matching_inputs = [
+                inp_name
+                for (d, w, inp_name) in port_info
+                if d == "input" and w == width and width
+            ]
+            if matching_inputs:
+                rhs = " & ".join(matching_inputs)
+                body_lines.append(f"  assign {pname} = {rhs};")
+            else:
+                body_lines.append(f"  assign {pname} = '0;")
+
+        body_block = ("\n" + "\n".join(body_lines)) if body_lines else ""
 
         stub = (
-            f"// Auto-generated blackbox stub for {name} "
+            f"// Auto-generated passthrough stub for {name} "
             f"(ports/params recovered from {parent_rtl.name}).\n"
-            f"(* blackbox *)\n"
             f"module {name}{param_block}"
-            f"{' (' + chr(10) + port_block + chr(10) + ')' if port_block else ''};\n"
+            f"{' (' + chr(10) + port_block + chr(10) + ')' if port_block else ''};"
+            f"{body_block}\n"
             f"endmodule\n"
         )
         path.write_text(stub, encoding="utf-8")
