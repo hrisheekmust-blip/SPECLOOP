@@ -44,7 +44,7 @@ Ports:
 {% if sm.ir.parameters %}
 Parameters:
 {% for p in sm.ir.parameters %}
-{% if is_derived_param(p.default) %}
+{% if p.is_local or is_derived_param(p.default) %}
   [DERIVED — omit from #()] {{ p.name }} = {{ p.default }}
 {% else %}
   [SAFE to override] parameter {{ p.name }} = {{ p.default or "?" }};

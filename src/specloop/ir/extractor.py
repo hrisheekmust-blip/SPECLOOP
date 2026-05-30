@@ -236,7 +236,11 @@ def _body_to_ir(body, file_path: str, sm) -> ModuleIR:
             val = str(param.value) if param.value is not None else None
         except Exception:
             val = None
-        params.append(Parameter(name=param.name, default=val))
+        try:
+            is_local = bool(param.isLocalParam)
+        except Exception:
+            is_local = False
+        params.append(Parameter(name=param.name, default=val, is_local=is_local))
 
     members = list(syn.members)
     always_blocks = _extract_always_blocks(members, sm=sm)

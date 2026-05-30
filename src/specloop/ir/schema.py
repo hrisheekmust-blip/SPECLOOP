@@ -17,6 +17,7 @@ class Parameter(BaseModel):
     name: str
     type: str = "int"
     default: Optional[str] = None
+    is_local: bool = False  # localparam — cannot be overridden in instantiations
 
 
 class SubmoduleInstance(BaseModel):
