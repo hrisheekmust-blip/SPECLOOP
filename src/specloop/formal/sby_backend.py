@@ -105,7 +105,7 @@ class SBYBackend(FormalBackend):
                     "Compile error references missing modules %s — retrying with stubs",
                     missing,
                 )
-                stub_files = _write_stubs(missing, work_dir)
+                stub_files = _write_stubs(missing, work_dir, parent_rtl=rtl_files[0])
                 proc2, wall2, combined2 = _write_and_run(stub_files)
                 # Use the retry result only if it improved things (didn't get worse).
                 if proc2.returncode != _RC_ERROR:
@@ -326,24 +326,206 @@ def _render_sby_config(
     )
 
 
-def _write_stubs(missing: list[str], work_dir: Path) -> list[Path]:
-    """Write empty-stub .sv files for each missing module.
+def _find_matching_paren(s: str, open_idx: int) -> int:
+    """Return the index of the close paren matching s[open_idx]='(' or -1."""
+    if open_idx >= len(s) or s[open_idx] != "(":
+        return -1
+    depth = 0
+    in_string = False
+    i = open_idx
+    while i < len(s):
+        c = s[i]
+        if c == '"':
+            bs = 0
+            k = i - 1
+            while k >= 0 and s[k] == "\\":
+                bs += 1
+                k -= 1
+            if bs % 2 == 0:
+                in_string = not in_string
+        elif not in_string:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return i
+        i += 1
+    return -1
 
-    Yosys treats an empty `module X (.*); endmodule` as a blackbox: the cell
-    elaborates against the stub's wildcard port list and the contents are
-    treated as opaque. This is more reliable than the `blackbox` script
-    command, which requires the module to already be in the design.
+
+def _extract_signal_widths(parent_text: str) -> dict[str, str]:
+    """Map signal_name → packed-range string from port/wire/logic decls.
+
+    Catches the common Yosys-friendly forms:
+      input  logic [Width-1:0] in_i;
+      wire   [N-1:0]           sig;
+      output [3:0]             data;
+    """
+    widths: dict[str, str] = {}
+    pattern = re.compile(
+        r"\b(?:input|output|inout|wire|logic|reg)\s+"
+        r"(?:wire|logic|reg)?\s*"
+        r"\[(?P<range>[^\]]+)\]\s+"
+        r"(?P<name>\w+)"
+    )
+    for m in pattern.finditer(parent_text):
+        widths.setdefault(m.group("name"), m.group("range").strip())
+    return widths
+
+
+def _parse_port_mappings(port_text: str) -> list[tuple[str, str]]:
+    """Parse `.name(expr), .name(expr), .name` into [(name, expr)].
+
+    Implicit ports (no parens) map the port to a same-named signal.
+    """
+    out: list[tuple[str, str]] = []
+    i = 0
+    n = len(port_text)
+    while i < n:
+        if port_text[i] != ".":
+            i += 1
+            continue
+        j = i + 1
+        while j < n and (port_text[j].isalnum() or port_text[j] == "_"):
+            j += 1
+        name = port_text[i + 1:j]
+        if not name:
+            i = j + 1
+            continue
+        # Skip whitespace
+        while j < n and port_text[j].isspace():
+            j += 1
+        if j < n and port_text[j] == "(":
+            close = _find_matching_paren(port_text, j)
+            if close == -1:
+                break
+            expr = port_text[j + 1:close].strip()
+            out.append((name, expr))
+            i = close + 1
+        else:
+            # Implicit .name → connects to a signal of the same name
+            out.append((name, name))
+            i = j
+    return out
+
+
+def _extract_instantiation(
+    parent_text: str, module_name: str
+) -> tuple[list[str], list[tuple[str, str]]] | None:
+    """Find first instantiation of `module_name` in parent_text.
+
+    Returns (param_names, [(port_name, connected_expr), ...]) or None.
+    """
+    pattern = re.compile(rf"\b{re.escape(module_name)}\b\s*(#\s*\(|\w+\s*\()")
+    m = pattern.search(parent_text)
+    if not m:
+        return None
+
+    params: list[str] = []
+    cursor = m.end() - len(m.group(1))
+
+    # Optional `#(...)` parameter override list
+    if parent_text[cursor] == "#":
+        hash_open = parent_text.find("(", cursor)
+        if hash_open == -1:
+            return None
+        param_close = _find_matching_paren(parent_text, hash_open)
+        if param_close == -1:
+            return None
+        param_text = parent_text[hash_open + 1:param_close]
+        params = re.findall(r"\.(\w+)\s*\(", param_text)
+        cursor = param_close + 1
+
+    # Instance name + port list `inst_name (...)`
+    inst_match = re.match(r"\s*\w+\s*\(", parent_text[cursor:])
+    if not inst_match:
+        return None
+    port_open = cursor + inst_match.end() - 1
+    port_close = _find_matching_paren(parent_text, port_open)
+    if port_close == -1:
+        return None
+    ports = _parse_port_mappings(parent_text[port_open + 1:port_close])
+    return params, ports
+
+
+def _infer_port_width(expr: str, parent_widths: dict[str, str]) -> str:
+    """Best-effort width inference for a port-connection expression.
+
+      bare identifier → look up parent declaration
+      {N{...}}        → N-1:0 (replication operator)
+    """
+    if re.fullmatch(r"\w+", expr):
+        return parent_widths.get(expr, "")
+    m = re.match(r"\{\s*([^{}]+?)\s*\{", expr)
+    if m:
+        return f"{m.group(1).strip()}-1:0"
+    return ""
+
+
+def _write_stubs(
+    missing: list[str], work_dir: Path, parent_rtl: Path
+) -> list[Path]:
+    """Write `(* blackbox *)` stub .sv files for each missing module.
+
+    Parses `parent_rtl` to recover the actual instantiation: the parameter
+    names from `#(...)` and the port names from `(.name(expr), ...)`. Port
+    direction is inferred from the OpenTitan `_i` / `_o` suffix convention
+    (default input). Port width is inferred from the connected expression
+    when it's a bare signal declared in the parent.
+
+    Falls back to a permissive `(.*)` wildcard stub if the instantiation
+    can't be located.
     """
     stub_dir = work_dir / "_stubs"
     stub_dir.mkdir(parents=True, exist_ok=True)
+
+    parent_text = parent_rtl.read_text(encoding="utf-8", errors="replace")
+    parent_widths = _extract_signal_widths(parent_text)
+
     out: list[Path] = []
     for name in missing:
         path = stub_dir / f"{name}.sv"
-        path.write_text(
-            f"// Auto-generated stub for missing module — treated as a blackbox.\n"
-            f"module {name} (.*);\nendmodule\n",
-            encoding="utf-8",
+        spec = _extract_instantiation(parent_text, name)
+
+        if spec is None:
+            # No instantiation found — fall back to wildcard.
+            path.write_text(
+                f"// Auto-generated permissive blackbox stub for {name}.\n"
+                f"(* blackbox *)\nmodule {name} (.*);\nendmodule\n",
+                encoding="utf-8",
+            )
+            out.append(path.resolve())
+            continue
+
+        params, ports = spec
+
+        # Parameter declarations: we know names but not types/defaults — use
+        # `parameter <name> = 1` which Yosys accepts and which the parent's
+        # override will replace at elaboration.
+        if params:
+            param_lines = ",\n  ".join(f"parameter {p} = 1" for p in params)
+            param_block = f" #(\n  {param_lines}\n)"
+        else:
+            param_block = ""
+
+        port_lines: list[str] = []
+        for pname, expr in ports:
+            direction = "output" if pname.endswith("_o") else "input"
+            width = _infer_port_width(expr.strip(), parent_widths)
+            width_str = f"[{width}] " if width else ""
+            port_lines.append(f"  {direction} logic {width_str}{pname}")
+        port_block = ",\n".join(port_lines) if port_lines else ""
+
+        stub = (
+            f"// Auto-generated blackbox stub for {name} "
+            f"(ports/params recovered from {parent_rtl.name}).\n"
+            f"(* blackbox *)\n"
+            f"module {name}{param_block}"
+            f"{' (' + chr(10) + port_block + chr(10) + ')' if port_block else ''};\n"
+            f"endmodule\n"
         )
+        path.write_text(stub, encoding="utf-8")
         out.append(path.resolve())
     return out
 
