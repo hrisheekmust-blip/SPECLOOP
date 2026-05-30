@@ -13,6 +13,10 @@ class SearchResult(BaseModel):
     assertion_summary: list[str]
     file_path: str
     record_id: str
+    ppa_latency: float = 0.5
+    ppa_throughput: float = 0.5
+    ppa_area: float = 0.5
+    ppa_power: float = 0.5
 
 
 def search(
@@ -50,5 +54,9 @@ def search(
             assertion_summary=p.get("assertion_summary", []),
             file_path=p.get("file_path", ""),
             record_id=p.get("record_id", ""),
+            ppa_latency=p.get("ppa_latency", 0.5),
+            ppa_throughput=p.get("ppa_throughput", 0.5),
+            ppa_area=p.get("ppa_area", 0.5),
+            ppa_power=p.get("ppa_power", 0.5),
         ))
     return results

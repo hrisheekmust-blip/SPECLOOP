@@ -84,10 +84,23 @@ def ingest(
     # Build resolver
     resolver = DependencyResolver(irs)
 
-    # Write IR JSON files
+    # Write IR JSON files (+ a PPA sidecar for inspection / index-time availability)
+    from specloop.ppa.features import extract_features
+    from specloop.ppa.vector import features_to_vector
+
     for ir in irs:
         out_file = work / f"{ir.module}.ir.json"
         out_file.write_text(ir.model_dump_json(indent=2))
+
+        features = extract_features(ir)
+        vector = features_to_vector(features)
+        ppa_file = work / f"{ir.module}.ppa.json"
+        ppa_file.write_text(
+            json.dumps(
+                {"features": features.model_dump(), "vector": vector.model_dump()},
+                indent=2,
+            )
+        )
 
     # Write filelists for each module (or just the named top)
     targets = [top] if top else resolver.roots()
@@ -823,6 +836,7 @@ def compose(
     from specloop.gen.client import make_client
     from specloop.compose.decomposer import Decomposer
     from specloop.compose.pipeline import CompositionPipeline, CompositionError
+    from specloop.ppa.target import infer_target
 
     cfg = SpecloopConfig()
     if mode:
@@ -840,6 +854,18 @@ def compose(
             raise typer.Exit(1)
 
     _print_composition_plan(plan)
+
+    # Infer the user's PPA target from the request to steer module selection.
+    with console.status("[bold]Inferring PPA target…[/bold]"):
+        ppa_target = infer_target(request, client)
+    console.print(
+        f"[bold]Inferred PPA target:[/bold] "
+        f"latency={ppa_target.latency:.2f} "
+        f"throughput={ppa_target.throughput:.2f} "
+        f"area={ppa_target.area:.2f} "
+        f"power={ppa_target.power:.2f} "
+        f"[dim](confidence={ppa_target.confidence:.2f})[/dim]"
+    )
 
     if dry_run:
         raise typer.Exit(0)
@@ -879,6 +905,7 @@ def compose(
                 formal=formal,
                 formal_mode=cfg.formal_mode,
                 formal_repair_iterations=cfg.formal_repair_iterations,
+                ppa_target=ppa_target,
             )
         except CompositionError as exc:
             console.print(f"[red]Composition error:[/red] {exc}")

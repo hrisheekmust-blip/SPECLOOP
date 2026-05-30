@@ -22,6 +22,8 @@ from specloop.compose.schema import (
     SelectedModule,
 )
 from specloop.compose.wrapper_gen import WrapperGenerator
+from specloop.ppa.target import PPATarget
+from specloop.ppa.vector import PPAVector, distance
 
 log = logging.getLogger(__name__)
 
@@ -58,10 +60,11 @@ class CompositionPipeline:
         formal: Optional[FormalBackend] = None,
         formal_mode: str = "prove",
         formal_repair_iterations: int = 3,
+        ppa_target: Optional[PPATarget] = None,
     ) -> CompositionResult:
         # Step 2: Search + candidate selection
         log.info("Step 2: selecting candidates from Qdrant")
-        selected, skipped = self._select_modules(plan, work_dir)
+        selected, skipped = self._select_modules(plan, work_dir, ppa_target)
 
         # Step 3: Compatibility check
         log.info("Step 3: checking port compatibility")
@@ -149,7 +152,8 @@ class CompositionPipeline:
     # ------------------------------------------------------------------
 
     def _select_modules(
-        self, plan: CompositionPlan, work_dir: Path
+        self, plan: CompositionPlan, work_dir: Path,
+        ppa_target: Optional[PPATarget] = None,
     ) -> tuple[list[SelectedModule], list[str]]:
         """Return (selected, skipped_warnings).
 
@@ -198,10 +202,39 @@ class CompositionPipeline:
                     f"Try --min-confidence {best.confidence:.1f} or index a better-verified module."
                 )
 
-            best = max(eligible, key=lambda r: r.score * r.confidence)
+            if ppa_target is None or len(eligible) <= 1:
+                # No PPA target or only one choice — use existing selection.
+                best = max(eligible, key=lambda r: r.score * r.confidence)
+                ppa_used = False
+            else:
+                # PPA-aware selection: among eligible candidates, pick the one
+                # whose PPA vector is closest to the target (blended 60/40 with
+                # semantic score). Old modules without PPA payload default to
+                # 0.5, so this degrades gracefully toward the semantic ranking.
+                target_vec = PPAVector(
+                    latency=ppa_target.latency,
+                    throughput=ppa_target.throughput,
+                    area=ppa_target.area,
+                    power=ppa_target.power,
+                )
+
+                def ppa_score(r):
+                    candidate_vec = PPAVector(
+                        latency=r.ppa_latency,
+                        throughput=r.ppa_throughput,
+                        area=r.ppa_area,
+                        power=r.ppa_power,
+                    )
+                    ppa_dist = distance(candidate_vec, target_vec)
+                    # Weight: 60% semantic, 40% PPA proximity (distance inverted).
+                    return 0.6 * r.score * r.confidence + 0.4 * (1.0 - ppa_dist)
+
+                best = max(eligible, key=ppa_score)
+                ppa_used = True
+
             log.info(
-                "Selected '%s' for sub-function '%s' (score=%.4f, confidence=%.2f)",
-                best.module_name, sf.id, best.score, best.confidence,
+                "Selected '%s' for sub-function '%s' (score=%.4f, confidence=%.2f, ppa_aware=%s)",
+                best.module_name, sf.id, best.score, best.confidence, ppa_used,
             )
 
             # Load ModuleIR from work dir

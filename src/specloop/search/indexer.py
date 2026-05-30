@@ -84,6 +84,14 @@ def index_pair(
     point_id = str(uuid.uuid5(_NS, f"specloop.module.{pair.module_name}"))
 
     confidence = pair.proof.proven / max(pair.proof.total, 1)
+
+    # PPA vector — recomputed from the embedded ModuleIR (free, no extra plumbing).
+    from specloop.ir.schema import ModuleIR
+    from specloop.ppa.features import extract_features
+    from specloop.ppa.vector import features_to_vector
+
+    ppa_vector = features_to_vector(extract_features(ModuleIR.model_validate(pair.module_ir)))
+
     payload = {
         "module_name": pair.module_name,
         "module_type": pair.module_type,
@@ -92,6 +100,10 @@ def index_pair(
         "file_path": pair.file_path,
         "record_id": pair.record_id,
         "assertion_summary": [f"{a.name}: {a.rationale}" for a in pair.assertion_index],
+        "ppa_latency": ppa_vector.latency,
+        "ppa_throughput": ppa_vector.throughput,
+        "ppa_area": ppa_vector.area,
+        "ppa_power": ppa_vector.power,
     }
 
     client = QdrantClient(url=qdrant_url)
