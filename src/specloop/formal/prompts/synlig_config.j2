@@ -1,0 +1,16 @@
+[options]
+mode {{ mode }}
+depth {{ depth }}
+
+[engines]
+smtbmc{% if solver %} {{ solver }}{% endif %}
+
+[script]
+read_systemverilog -formal{% for d in include_dirs %} -I{{ d }}{% endfor %}{% for f in rtl_files %} {{ f.name }}{% endfor %} {{ bind_path.name }}
+prep -top {{ module_name }}
+
+[files]
+{% for f in rtl_files %}
+{{ f }}
+{% endfor %}
+{{ bind_path }}

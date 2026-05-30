@@ -43,13 +43,14 @@ class SpecloopConfig(BaseSettings):
     llm_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
 
     # Formal verification
-    formal_backend: Literal["sby"] = Field(default="sby")
+    formal_backend: Literal["sby", "synlig"] = Field(default="sby")
     formal_mode: Literal["bmc", "prove", "cover"] = Field(default="prove")
     formal_depth: int = Field(default=20)
     formal_timeout: int = Field(default=300)      # seconds per SBY run
     formal_solver: str = Field(default="")        # "" = SBY default; "bitwuzla", "yices", etc.
     formal_repair_iterations: int = Field(default=3)
     formal_debug: bool = Field(default=False)    # print raw SBY stdout/stderr
+    synlig_path: str = Field(default="~/projects/specloop2/synlig/bin/synlig")
 
     # Semantic search
     qdrant_url: str = Field(default="http://localhost:6333")

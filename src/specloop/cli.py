@@ -313,17 +313,12 @@ def spec(
         raise typer.Exit(0)
 
     # ── Formal verification ─────────────────────────────────────────────────
-    from specloop.formal.sby_backend import SBYBackend
+    formal = _make_formal_backend(cfg, sby_bin)
 
-    formal = SBYBackend(
-        sby_path=sby_bin,
-        timeout=cfg.formal_timeout,
-        depth=cfg.formal_depth,
-        solver=cfg.formal_solver,
-        debug=cfg.formal_debug,
+    console.print(
+        f"\n[bold]Running formal[/bold] "
+        f"(backend={cfg.formal_backend}, mode={cfg.formal_mode}, depth={cfg.formal_depth})…"
     )
-
-    console.print(f"\n[bold]Running SBY[/bold] (mode={cfg.formal_mode}, depth={cfg.formal_depth})…")
     try:
         formal_result = formal.run(
             module_name=module,
@@ -429,6 +424,28 @@ def _find_sby_binary() -> str | None:
             return str(candidate)
 
     return None
+
+
+def _make_formal_backend(cfg, sby_bin: str):
+    """Construct the configured FormalBackend (sby or synlig)."""
+    if cfg.formal_backend == "synlig":
+        from specloop.formal.synlig_backend import SynligBackend
+        return SynligBackend(
+            synlig_path=cfg.synlig_path,
+            sby_path=sby_bin,
+            timeout=cfg.formal_timeout,
+            depth=cfg.formal_depth,
+            solver=cfg.formal_solver,
+            debug=cfg.formal_debug,
+        )
+    from specloop.formal.sby_backend import SBYBackend
+    return SBYBackend(
+        sby_path=sby_bin,
+        timeout=cfg.formal_timeout,
+        depth=cfg.formal_depth,
+        solver=cfg.formal_solver,
+        debug=cfg.formal_debug,
+    )
 
 
 def _verify_toolchain(sby_bin: str) -> bool:
@@ -832,14 +849,7 @@ def compose(
     if not no_verify:
         sby_bin = _find_sby_binary()
         if sby_bin:
-            from specloop.formal.sby_backend import SBYBackend
-            formal = SBYBackend(
-                sby_path=sby_bin,
-                timeout=cfg.formal_timeout,
-                depth=cfg.formal_depth,
-                solver=cfg.formal_solver,
-                debug=cfg.formal_debug,
-            )
+            formal = _make_formal_backend(cfg, sby_bin)
         else:
             console.print(
                 "[yellow]sby not found — skipping formal verification.[/yellow]\n"
