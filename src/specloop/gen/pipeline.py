@@ -154,6 +154,7 @@ class AssertionPipeline:
         raw = self._client.generate(system, user)
         data = _parse_json(raw, "property_hardening")
         bind_sv = _sanitize_sv(data.get("bind_module", ""))
+        bind_sv = _sanitize_property_assertions(bind_sv)
         bind_sv = _sanitize_bind_ports(bind_sv)
         bind_sv = _hoist_wires_from_always(bind_sv)
         index_raw = data.get("assertion_index", [])
@@ -364,6 +365,71 @@ def _hoist_wires_from_always(sv: str) -> str:
     return before + ''.join(hoisted) + '\n' + after_cleaned
 
 
+def _sanitize_property_assertions(sv: str) -> str:
+    """Rewrite `assert property(...)` into Yosys-compatible `assert(...)`.
+
+    Yosys with the open-source backend rejects SVA property syntax. This
+    sanitizer rewrites the common LLM-generated patterns:
+
+      assert property (<expr>)                       → assert (<expr>)
+      assert property (@(posedge clk) <expr>)        → assert (<expr>)
+      assert property (@(...) disable iff (...) e)   → assert (e)
+
+    Implication operators (`|->` / `|=>`) inside the body are left intact —
+    a follow-up sanitizer or LLM repair iteration can handle those.
+    """
+    _START = re.compile(r"\bassert\s+property\s*\(")
+    out: list[str] = []
+    cursor = 0
+    while True:
+        m = _START.search(sv, cursor)
+        if not m:
+            out.append(sv[cursor:])
+            break
+        out.append(sv[cursor:m.start()])
+
+        # Find the matching close paren starting at the '(' position
+        open_paren = m.end() - 1
+        depth = 0
+        in_string = False
+        end = -1
+        j = open_paren
+        while j < len(sv):
+            c = sv[j]
+            if c == '"':
+                bs = 0
+                k = j - 1
+                while k >= 0 and sv[k] == "\\":
+                    bs += 1
+                    k -= 1
+                if bs % 2 == 0:
+                    in_string = not in_string
+            elif not in_string:
+                if c == "(":
+                    depth += 1
+                elif c == ")":
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
+            j += 1
+
+        if end == -1:
+            # Unbalanced — leave the rest of the string as-is
+            out.append(sv[m.start():])
+            break
+
+        inner = sv[m.end():end]
+        # Strip leading clocking event @(...)
+        inner = re.sub(r"^\s*@\s*\([^)]*\)\s*", "", inner)
+        # Strip leading `disable iff (...)`
+        inner = re.sub(r"^\s*disable\s+iff\s*\([^)]*\)\s*", "", inner)
+        out.append(f"assert ({inner.strip()})")
+        cursor = end + 1
+
+    return "".join(out)
+
+
 def _sanitize_bind_ports(sv: str) -> str:
     """Force all spec module port declarations to `input`.
 
@@ -443,6 +509,30 @@ def _parse_json(raw: str, stage: str) -> dict:
                         )
                         return {}
 
+    # Truncation repair: the response ran out before the top-level `}` closed.
+    # Try to close the unclosed brackets (or truncate to last complete array
+    # element and close from there). Surfacing partial assertions beats
+    # returning nothing on every truncated response.
+    repaired = _repair_truncated_json(raw, start)
+    if repaired is not None:
+        try:
+            data = json.loads(repaired)
+            log.warning(
+                "Repaired truncated JSON from %s (recovered %d assertion entries)",
+                stage,
+                len(data.get("assertion_index", []) if isinstance(data, dict) else []),
+            )
+            return data
+        except json.JSONDecodeError:
+            try:
+                data = json.loads(_escape_control_chars_in_strings(repaired))
+                log.warning(
+                    "Repaired truncated JSON from %s after control-char escape", stage,
+                )
+                return data
+            except json.JSONDecodeError:
+                pass
+
     log.warning(
         "Could not parse JSON from %s: unbalanced braces\nRaw: %.300s", stage, raw
     )
@@ -479,6 +569,96 @@ def _escape_control_chars_in_strings(s: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+def _repair_truncated_json(raw: str, start: int) -> str | None:
+    """Best-effort repair of JSON cut off mid-response by token limits.
+
+    Two strategies, tried in order:
+      1. If we ran out of input outside any string, append the matching
+         closers (}/]) in reverse stack order.
+      2. If we ran out inside a string, truncate back to the position right
+         after the last `}` that completed an element inside an array, then
+         close the remaining open brackets.
+
+    Returns repaired JSON text, or None if the input wasn't truncated.
+    """
+    stack: list[str] = []
+    in_string = False
+    escape_next = False
+    last_array_elem_end = -1  # position right after a `}` closed inside [...]
+
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape_next = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            stack.append("{")
+        elif ch == "[":
+            stack.append("[")
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+                if stack and stack[-1] == "[":
+                    last_array_elem_end = i + 1
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    if not stack and not in_string:
+        return None  # not actually truncated
+
+    # Strategy 1: outside any string — just close what's open.
+    if not in_string:
+        closers = "".join("}" if c == "{" else "]" for c in reversed(stack))
+        return raw[start:] + closers
+
+    # Strategy 2: mid-string — truncate to last complete array element.
+    if last_array_elem_end <= start:
+        return None  # no safe cut point
+
+    # Recompute the bracket stack at last_array_elem_end so we know what
+    # still needs closing.
+    s2: list[str] = []
+    in_str2 = False
+    esc2 = False
+    for j in range(start, last_array_elem_end):
+        c = raw[j]
+        if esc2:
+            esc2 = False
+            continue
+        if in_str2:
+            if c == "\\":
+                esc2 = True
+            elif c == '"':
+                in_str2 = False
+            continue
+        if c == '"':
+            in_str2 = True
+            continue
+        if c == "{":
+            s2.append("{")
+        elif c == "[":
+            s2.append("[")
+        elif c == "}":
+            if s2 and s2[-1] == "{":
+                s2.pop()
+        elif c == "]":
+            if s2 and s2[-1] == "[":
+                s2.pop()
+
+    closers = "".join("}" if c == "{" else "]" for c in reversed(s2))
+    return raw[start:last_array_elem_end] + closers
 
 
 def _placeholder_bind(ir: ModuleIR) -> str:

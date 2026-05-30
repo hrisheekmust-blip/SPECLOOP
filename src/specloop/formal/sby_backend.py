@@ -63,37 +63,62 @@ class SBYBackend(FormalBackend):
     ) -> FormalResult:
         assertion_index = assertion_index or []
 
-        # 1. Write .sby config
-        # RTL files are read without -formal so `ifdef FORMAL blocks are skipped,
-        # preventing pre-existing RTL asserts from becoming untracked formal properties.
-        rtl_files = _unique_paths([rtl_path] + deps)
+        # 1. Preprocess RTL files (rewrite import-in-header + unpacked array ports).
+        # Non-destructive: only writes to work_dir/_preprocessed/ when patterns match.
+        raw_rtl_files = _unique_paths([rtl_path] + deps)
+        rtl_files = [_preprocess_rtl(p, work_dir) for p in raw_rtl_files]
         bind_abs = bind_path.resolve()
 
         from specloop.config import SpecloopConfig
         _cfg = SpecloopConfig()
         include_dirs = [d.resolve() for d in _cfg.rtl_include_dirs] if _cfg.rtl_include_dirs else []
 
-        sby_content = _render_sby_config(
-            module_name=module_name,
-            rtl_files=rtl_files,
-            bind_path=bind_abs,
-            mode=mode,
-            depth=self._depth,
-            solver=self._solver,
-            include_dirs=include_dirs,
-        )
         sby_file = work_dir / f"{module_name}.sby"
-        sby_file.write_text(sby_content, encoding="utf-8")
-        log.debug("Wrote SBY config: %s", sby_file)
 
-        # 2. Run SBY
-        t0 = time.monotonic()
-        proc = _run_sby(self._sby, sby_file.name, work_dir, self._timeout)
-        wall_seconds = time.monotonic() - t0
+        def _write_and_run(extra_files: list[Path]) -> tuple[subprocess.CompletedProcess, float, str]:
+            sby_content = _render_sby_config(
+                module_name=module_name,
+                rtl_files=rtl_files + extra_files,
+                bind_path=bind_abs,
+                mode=mode,
+                depth=self._depth,
+                solver=self._solver,
+                include_dirs=include_dirs,
+            )
+            sby_file.write_text(sby_content, encoding="utf-8")
+            log.debug("Wrote SBY config: %s (stubs=%s)", sby_file, [p.name for p in extra_files])
+            t0 = time.monotonic()
+            p = _run_sby(self._sby, sby_file.name, work_dir, self._timeout)
+            wall = time.monotonic() - t0
+            return p, wall, (p.stdout or "") + (p.stderr or "")
+
+        # 2. First SBY run
+        proc, wall_seconds, combined = _write_and_run([])
+
+        # 2b. Transparent stub retry: if compile_error, parse missing-module
+        # names from the log, generate minimal empty stubs, and re-run once so
+        # Yosys treats them as blackboxes.
+        if proc.returncode == _RC_ERROR:
+            missing = _extract_missing_modules(combined)
+            if missing:
+                log.info(
+                    "Compile error references missing modules %s — retrying with stubs",
+                    missing,
+                )
+                stub_files = _write_stubs(missing, work_dir)
+                proc2, wall2, combined2 = _write_and_run(stub_files)
+                # Use the retry result only if it improved things (didn't get worse).
+                if proc2.returncode != _RC_ERROR:
+                    proc, combined = proc2, combined2
+                    wall_seconds += wall2
+                else:
+                    # Surface that we tried — keep original (also error) but
+                    # accumulate elapsed time so timing reflects real work done.
+                    wall_seconds += wall2
+                    combined = combined2  # retry log is more informative
 
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
-        combined = stdout + stderr
         rc = proc.returncode
 
         log.debug("SBY exit code=%d  wall=%.1fs", rc, wall_seconds)
@@ -140,6 +165,129 @@ class SBYBackend(FormalBackend):
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Yosys/SBY error format:
+#   ERROR: Module `\prim_and2' referenced in module `\prim_blanker' in cell ...
+_MISSING_MODULE_RE = re.compile(
+    r"Module\s+`\\?([A-Za-z_]\w*)'\s+referenced\s+in\s+module"
+)
+
+
+def _extract_missing_modules(log_output: str) -> list[str]:
+    """Find unique module names from Yosys 'Module X referenced ...' errors."""
+    seen: dict[str, None] = {}
+    for name in _MISSING_MODULE_RE.findall(log_output):
+        seen.setdefault(name, None)
+    return list(seen)
+
+
+# Pattern: module header that has an import statement BEFORE the parameter list.
+#   module <name>\n  import <pkg>::*;\n#(
+# Captures the leading `module <name>` line and the offending import line(s).
+_HEADER_IMPORT_RE = re.compile(
+    r"(?P<head>\bmodule\s+(?P<name>\w+)\b[^\n;]*\n)"
+    r"(?P<imports>(?:[ \t]*import\s+[\w:*, ]+;[ \t]*\n)+)"
+    r"(?P<rest>[ \t]*#\s*\()",
+)
+
+# Pattern: unpacked array port like `input [DW-1:0] data_i [N]`.
+# Captures direction, optional `wire/logic`, packed range, name, unpacked range.
+_UNPACKED_PORT_RE = re.compile(
+    r"\b(?P<dir>input|output|inout)\b"
+    r"(?P<mid>\s+(?:wire|logic|reg)?\s*)"
+    r"\[(?P<pack>[^\]]+)\]"
+    r"\s+(?P<name>\w+)"
+    r"\s*\[(?P<unp>[^\]]+)\]"
+)
+
+
+def _preprocess_rtl(src_path: Path, work_dir: Path) -> Path:
+    """Rewrite an RTL file in-place into work_dir/_preprocessed if it hits
+    Yosys-incompatible patterns: header imports before #( and unpacked array
+    ports. Returns the preprocessed path when modified, the original path
+    otherwise (zero overhead for clean RTL).
+    """
+    try:
+        src_text = src_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return src_path
+
+    new_text = src_text
+    changed = False
+
+    # Fix 1: header import — move imports from between `module X` and `#(`
+    # to right after the `;` ending the port list.
+    def _move_imports(m: re.Match) -> str:
+        nonlocal changed
+        changed = True
+        # Keep module header + `#(` but drop the imports here.
+        # The captured `imports` block is re-inserted after `);` below.
+        # We stash the imports via a closure-local list so the second pass
+        # can reach them.
+        _captured_imports.append(m.group("imports").strip())
+        return m.group("head") + m.group("rest")
+
+    _captured_imports: list[str] = []
+    new_text = _HEADER_IMPORT_RE.sub(_move_imports, new_text)
+    if _captured_imports:
+        # Insert each captured import block after the first `);` that ends a
+        # port list (matches one per module rewrite). We walk module by
+        # module and inject the import block just before the first body
+        # statement.
+        parts: list[str] = []
+        cursor = 0
+        for imports in _captured_imports:
+            close = new_text.find(");", cursor)
+            if close == -1:
+                break
+            # Insert after the `;` and newline of the port list close
+            insert_at = close + len(");")
+            # Walk to end-of-line so we put imports on their own line
+            nl = new_text.find("\n", insert_at)
+            if nl == -1:
+                nl = insert_at
+            parts.append(new_text[cursor : nl + 1])
+            parts.append(f"  {imports}\n")
+            cursor = nl + 1
+        parts.append(new_text[cursor:])
+        new_text = "".join(parts)
+
+    # Fix 2: flatten unpacked array ports.
+    # `input [W-1:0] name [N]` → `input [(N)*(W)-1:0] name`
+    def _flatten_unpacked(m: re.Match) -> str:
+        nonlocal changed
+        changed = True
+        direction = m.group("dir")
+        mid = m.group("mid")
+        pack = m.group("pack").strip()
+        name = m.group("name")
+        unp = m.group("unp").strip()
+        # Replace `W-1:0` style with `(N)*W-1:0`. Handle the common
+        # `<msb>:0` form by extracting the msb expression and multiplying.
+        if ":" in pack:
+            msb, lsb = pack.split(":", 1)
+            msb = msb.strip()
+            lsb = lsb.strip()
+            # Width = (msb - lsb + 1) for the inner; outer scaling = N
+            # Use ((msb)-(lsb)+1)*N - 1 : 0 as the new packed range
+            new_range = f"({unp})*(({msb})-({lsb})+1)-1:0"
+        else:
+            # Single-bit `[N]` case → just multiply
+            new_range = f"({unp})*({pack})-1:0"
+        return f"{direction}{mid}[{new_range}] {name}"
+
+    new_text = _UNPACKED_PORT_RE.sub(_flatten_unpacked, new_text)
+
+    if not changed:
+        return src_path
+
+    out_dir = work_dir / "_preprocessed"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / src_path.name
+    out_path.write_text(new_text, encoding="utf-8")
+    log.info("Preprocessed RTL: %s → %s", src_path.name, out_path)
+    return out_path
+
+
 def _unique_paths(paths: list[Path]) -> list[Path]:
     """Deduplicate paths, preserving order, resolving to absolute."""
     seen: set[Path] = set()
@@ -163,8 +311,8 @@ def _render_sby_config(
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(_PROMPTS_DIR)),
-        trim_blocks=True,
-        lstrip_blocks=True,
+        trim_blocks=False,
+        lstrip_blocks=False,
         keep_trailing_newline=True,
     )
     return env.get_template("sby_config.j2").render(
@@ -176,6 +324,28 @@ def _render_sby_config(
         solver=solver,
         include_dirs=include_dirs or [],
     )
+
+
+def _write_stubs(missing: list[str], work_dir: Path) -> list[Path]:
+    """Write empty-stub .sv files for each missing module.
+
+    Yosys treats an empty `module X (.*); endmodule` as a blackbox: the cell
+    elaborates against the stub's wildcard port list and the contents are
+    treated as opaque. This is more reliable than the `blackbox` script
+    command, which requires the module to already be in the design.
+    """
+    stub_dir = work_dir / "_stubs"
+    stub_dir.mkdir(parents=True, exist_ok=True)
+    out: list[Path] = []
+    for name in missing:
+        path = stub_dir / f"{name}.sv"
+        path.write_text(
+            f"// Auto-generated stub for missing module — treated as a blackbox.\n"
+            f"module {name} (.*);\nendmodule\n",
+            encoding="utf-8",
+        )
+        out.append(path.resolve())
+    return out
 
 
 def _run_sby(
