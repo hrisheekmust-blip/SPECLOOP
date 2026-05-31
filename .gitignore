@@ -9,3 +9,4 @@ __pycache__/
 venv/
 *.pyc
 .qdrant-initialized
+ibex_spec_run.log
