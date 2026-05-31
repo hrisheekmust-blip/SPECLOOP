@@ -775,15 +775,25 @@ def index_module(
 def search_modules(
     query: str = typer.Argument(..., help="Natural-language search query"),
     top_k: int = typer.Option(3, "--top-k", "-k", help="Number of results"),
+    assertion_weight: Optional[float] = typer.Option(
+        None, "--assertion-weight",
+        help="Blend proven-assertion similarity vs description (0-1); enables blended search",
+    ),
 ):
     """Search indexed modules by semantic similarity."""
     from specloop.config import SpecloopConfig
-    from specloop.search.searcher import search
+    from specloop.search.searcher import search, search_blended
 
     cfg = SpecloopConfig()
 
     with console.status("[bold]Embedding query and searching…[/bold]"):
-        results = search(query, cfg.qdrant_url, cfg.qdrant_collection, cfg.embed_model, top_k=top_k)
+        if assertion_weight is not None:
+            results = search_blended(
+                query, cfg.qdrant_url, cfg.qdrant_collection, cfg.embed_model,
+                top_k=top_k, assertion_weight=assertion_weight,
+            )
+        else:
+            results = search(query, cfg.qdrant_url, cfg.qdrant_collection, cfg.embed_model, top_k=top_k)
 
     if not results:
         console.print(
@@ -817,6 +827,59 @@ def search_modules(
             console.print(f"\n[bold cyan]#{rank} {r.module_name}[/bold cyan] — assertions:")
             for line in r.assertion_summary:
                 console.print(f"  [dim]{line}[/dim]")
+
+
+@app.command("search-explain")
+def search_explain(
+    query: str = typer.Argument(..., help="Natural-language search query"),
+    module: str = typer.Argument(..., help="Module name to explain the match for"),
+):
+    """Show which proven assertions made a module match a query, ranked by similarity."""
+    from specloop.config import SpecloopConfig
+    from specloop.search._embed import embed_query
+    from specloop.search.searcher import _cosine
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+    cfg = SpecloopConfig()
+    client = QdrantClient(url=cfg.qdrant_url)
+    if not client.collection_exists(cfg.qdrant_collection):
+        console.print("[yellow]No collection. Run 'specloop index <module>' first.[/yellow]")
+        raise typer.Exit(1)
+
+    points, _ = client.scroll(
+        collection_name=cfg.qdrant_collection,
+        scroll_filter=Filter(must=[FieldCondition(key="module_name", match=MatchValue(value=module))]),
+        with_payload=["assertion_summary", "assertion_vectors"],
+        with_vectors=False,
+        limit=1,
+    )
+    if not points:
+        console.print(f"[red]Module '{module}' not found in the index.[/red]")
+        raise typer.Exit(1)
+
+    payload = points[0].payload or {}
+    summaries = payload.get("assertion_summary", [])
+    vectors = payload.get("assertion_vectors", [])
+    if not vectors:
+        console.print(
+            f"[yellow]'{module}' has no assertion vectors "
+            f"(re-run 'specloop reindex' to populate them).[/yellow]"
+        )
+        raise typer.Exit(0)
+
+    with console.status("[bold]Embedding query…[/bold]"):
+        query_vec = embed_query(query, cfg.embed_model)
+
+    scored = sorted(
+        ((_cosine(query_vec, v), summaries[i] if i < len(summaries) else "?")
+         for i, v in enumerate(vectors)),
+        key=lambda x: x[0], reverse=True,
+    )
+
+    console.print(f"\nWhy '{module}' matched {query!r}:")
+    for score, summary in scored:
+        console.print(f"  [cyan]{score:.2f}[/cyan] - {summary}")
 
 
 @app.command()
@@ -994,6 +1057,39 @@ def compose(
     console.print(f"  Confidence: {result.confidence:.2f}")
 
 
+@app.command()
+def reindex(
+    log: Path = typer.Option(Path("work/training_data.jsonl"), "--log", "-l"),
+):
+    """Re-index all proven modules with updated vector representations."""
+    from specloop.config import SpecloopConfig
+    from specloop.search.indexer import index_pair
+    from specloop.training.logger import TrainingLogger
+
+    cfg = SpecloopConfig()
+    logger = TrainingLogger(log)
+
+    pairs = [
+        p for p in logger.load_proven_pairs()
+        if p.proof.status != "pending"
+    ]
+
+    console.print(f"Re-indexing {len(pairs)} proven modules...")
+
+    failed = []
+    for i, pair in enumerate(pairs):
+        try:
+            index_pair(pair, cfg.qdrant_url, cfg.qdrant_collection, cfg.embed_model)
+            console.print(f"[{i+1}/{len(pairs)}] [green]OK[/green]: {pair.module_name}")
+        except Exception as exc:
+            failed.append(pair.module_name)
+            console.print(f"[{i+1}/{len(pairs)}] [red]FAILED[/red]: {pair.module_name} — {exc}")
+
+    console.print(f"\nDone. {len(pairs)-len(failed)} succeeded, {len(failed)} failed.")
+    if failed:
+        console.print(f"Failed: {failed}")
+
+
 @app.command("vector-compose")
 def vector_compose(
     request: str = typer.Argument(..., help="Natural language description of desired design"),
@@ -1001,19 +1097,42 @@ def vector_compose(
     top_k: int = typer.Option(5, "--top-k", help="Number of composition candidates to show"),
     show_gap: bool = typer.Option(True, "--show-gap/--no-gap", help="Show gap analysis"),
     ppa_weight: float = typer.Option(0.4, "--ppa-weight", help="Weight of PPA vs functional score (0-1)"),
+    hierarchical: Optional[bool] = typer.Option(None, "--hierarchical/--no-hierarchical",
+        help="Use per-category assertion vectors (auto-detect by default)"),
+    structural_weight: float = typer.Option(0.0, "--structural-weight",
+        help="Reward architecturally diverse combinations (0-1; try 0.3)"),
+    diverse: bool = typer.Option(False, "--diverse/--no-diverse",
+        help="Shortcut for --structural-weight 0.3: find non-obvious combinations"),
+    assertion_weight: Optional[float] = typer.Option(
+        None, "--assertion-weight",
+        help="Use proven-assertion vectors for functional distance (presence enables it)",
+    ),
 ):
     """Find module combinations using vector arithmetic (no LLM decomposition).
 
     Shows top-k combinations ranked by how closely their vectors sum to the request.
     """
     from specloop.config import SpecloopConfig
-    from specloop.search.vector_search import search_compositions
+    from specloop.search.vector_search import (
+        search_compositions,
+        search_compositions_hierarchical,
+        retrieve_all_category_vectors,
+    )
     from specloop.search.gap_detector import detect_gap, format_gap_report
     from specloop.ppa.target import infer_target
     from specloop.ppa.vector import PPAVector
     from specloop.gen.client import make_client
 
     cfg = SpecloopConfig()
+
+    if diverse:
+        structural_weight = 0.3
+        console.print("[dim]Searching for non-obvious combinations…[/dim]")
+
+    # Auto-detect hierarchical when not explicitly set: on iff category vectors exist.
+    if hierarchical is None:
+        cat_vecs = retrieve_all_category_vectors(cfg.qdrant_url, cfg.qdrant_collection)
+        hierarchical = any(cat_vecs.values())
 
     # Infer PPA target from request (no API needed if it fails — uses default).
     try:
@@ -1033,17 +1152,49 @@ def vector_compose(
         power=ppa_target.power,
     ) if ppa_target else None
 
+    # --assertion-weight opts into assertion-centric functional distance (the
+    # hierarchical path has no such signature, so it routes to standard search).
+    use_av = assertion_weight is not None
+
+    # Dispatch precedence: structural/diverse > assertion-centric/standard >
+    # hierarchical category search. No-flag default is unchanged (hierarchical).
     with console.status("[bold]Searching vector space…[/bold]"):
-        results = search_compositions(
-            request=request,
-            qdrant_url=cfg.qdrant_url,
-            collection=cfg.qdrant_collection,
-            embed_model=cfg.embed_model,
-            max_components=max_components,
-            top_k=top_k,
-            ppa_target=ppa_vec,
-            ppa_weight=ppa_weight,
-        )
+        if structural_weight > 0:
+            results = search_compositions(
+                request=request,
+                qdrant_url=cfg.qdrant_url,
+                collection=cfg.qdrant_collection,
+                embed_model=cfg.embed_model,
+                max_components=max_components,
+                top_k=top_k,
+                ppa_target=ppa_vec,
+                ppa_weight=ppa_weight,
+                structural_weight=structural_weight,
+                use_assertion_vectors=use_av,
+            )
+        elif hierarchical and not use_av:
+            results = search_compositions_hierarchical(
+                request=request,
+                qdrant_url=cfg.qdrant_url,
+                collection=cfg.qdrant_collection,
+                embed_model=cfg.embed_model,
+                max_components=max_components,
+                top_k=top_k,
+                ppa_target=ppa_vec,
+                ppa_weight=ppa_weight,
+            )
+        else:
+            results = search_compositions(
+                request=request,
+                qdrant_url=cfg.qdrant_url,
+                collection=cfg.qdrant_collection,
+                embed_model=cfg.embed_model,
+                max_components=max_components,
+                top_k=top_k,
+                ppa_target=ppa_vec,
+                ppa_weight=ppa_weight,
+                use_assertion_vectors=use_av,
+            )
 
     if not results:
         console.print("[red]No results — is Qdrant running and indexed?[/red]")
@@ -1054,16 +1205,21 @@ def vector_compose(
     table.add_column("Modules")
     table.add_column("Func Distance", justify="right")
     table.add_column("PPA Distance", justify="right")
+    if structural_weight > 0:
+        table.add_column("Diversity", justify="right")
     table.add_column("Score", justify="right")
 
     for i, r in enumerate(results):
-        table.add_row(
+        row = [
             str(i + 1),
             " + ".join(r.modules),
             f"{r.distance_to_request:.4f}",
             f"{r.ppa_distance_to_target:.4f}",
-            f"{(r.distance_to_request + r.ppa_distance_to_target) / 2:.4f}",
-        )
+        ]
+        if structural_weight > 0:
+            row.append(f"{r.structural_diversity:.3f}" if r.structural_diversity is not None else "-")
+        row.append(f"{(r.distance_to_request + r.ppa_distance_to_target) / 2:.4f}")
+        table.add_row(*row)
     console.print(table)
 
     # Gap analysis on best result.
