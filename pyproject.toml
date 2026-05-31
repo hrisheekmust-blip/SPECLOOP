@@ -19,6 +19,8 @@ dependencies = [
     "vcdvcd",
     "sentence-transformers>=2.7",
     "qdrant-client>=1.9",
+    "numpy",
+    "scikit-learn",
 ]
 
 [project.scripts]

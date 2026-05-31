@@ -1,3 +1,3 @@
 llm_backend = "anthropic"
 llm_model = "claude-sonnet-4-5"
-rtl_include_dirs = ["/home/hrisheek/projects/specloop2/opentitan/hw/ip/prim/rtl"]
+rtl_include_dirs = ["/home/hrisheek/projects/specloop2/opentitan/hw/ip/prim/rtl", "/home/hrisheek/projects/specloop2/ibex/rtl"]

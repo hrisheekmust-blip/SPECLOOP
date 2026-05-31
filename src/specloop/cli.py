@@ -937,6 +937,23 @@ def compose(
         )
     console.print(table)
 
+    # ── Interaction gap (geometric, no LLM) ─────────────────────────────────
+    from specloop.compose.interaction_assertions import detect_interaction_gap
+    component_names = [s.search_result.module_name for s in result.selected_modules]
+    if component_names:
+        interaction_gap = detect_interaction_gap(
+            composition_request=request,
+            component_modules=component_names,
+            qdrant_url=cfg.qdrant_url,
+            collection=cfg.qdrant_collection,
+            embed_model=cfg.embed_model,
+        )
+        if interaction_gap.gap_magnitude > 0.05:
+            console.print(
+                f"[dim]Interaction coverage: {interaction_gap.coverage_percentage:.0%} "
+                f"— gap magnitude {interaction_gap.gap_magnitude:.3f}[/dim]"
+            )
+
     # ── Compatibility table ─────────────────────────────────────────────────
     if result.compatibility.issues:
         compat_table = Table(title="Compatibility Checks", show_lines=False)
@@ -975,6 +992,113 @@ def compose(
     console.print(f"  Wrapper: [cyan]{result.wrapper_sv_path}[/cyan]")
     console.print(f"  Bind:    [cyan]{result.bind_sv_path}[/cyan]")
     console.print(f"  Confidence: {result.confidence:.2f}")
+
+
+@app.command("vector-compose")
+def vector_compose(
+    request: str = typer.Argument(..., help="Natural language description of desired design"),
+    max_components: int = typer.Option(4, "--max-components", help="Max modules to combine"),
+    top_k: int = typer.Option(5, "--top-k", help="Number of composition candidates to show"),
+    show_gap: bool = typer.Option(True, "--show-gap/--no-gap", help="Show gap analysis"),
+    ppa_weight: float = typer.Option(0.4, "--ppa-weight", help="Weight of PPA vs functional score (0-1)"),
+):
+    """Find module combinations using vector arithmetic (no LLM decomposition).
+
+    Shows top-k combinations ranked by how closely their vectors sum to the request.
+    """
+    from specloop.config import SpecloopConfig
+    from specloop.search.vector_search import search_compositions
+    from specloop.search.gap_detector import detect_gap, format_gap_report
+    from specloop.ppa.target import infer_target
+    from specloop.ppa.vector import PPAVector
+    from specloop.gen.client import make_client
+
+    cfg = SpecloopConfig()
+
+    # Infer PPA target from request (no API needed if it fails — uses default).
+    try:
+        client = make_client(cfg)
+        ppa_target = infer_target(request, client)
+        console.print(f"[dim]PPA target: latency={ppa_target.latency:.2f} "
+                      f"throughput={ppa_target.throughput:.2f} "
+                      f"area={ppa_target.area:.2f} power={ppa_target.power:.2f}[/dim]")
+    except Exception:
+        ppa_target = None
+        console.print("[dim]PPA target: balanced (default)[/dim]")
+
+    ppa_vec = PPAVector(
+        latency=ppa_target.latency,
+        throughput=ppa_target.throughput,
+        area=ppa_target.area,
+        power=ppa_target.power,
+    ) if ppa_target else None
+
+    with console.status("[bold]Searching vector space…[/bold]"):
+        results = search_compositions(
+            request=request,
+            qdrant_url=cfg.qdrant_url,
+            collection=cfg.qdrant_collection,
+            embed_model=cfg.embed_model,
+            max_components=max_components,
+            top_k=top_k,
+            ppa_target=ppa_vec,
+            ppa_weight=ppa_weight,
+        )
+
+    if not results:
+        console.print("[red]No results — is Qdrant running and indexed?[/red]")
+        raise typer.Exit(1)
+
+    table = Table(title=f"Vector Composition Search: {request[:60]}")
+    table.add_column("Rank", justify="right")
+    table.add_column("Modules")
+    table.add_column("Func Distance", justify="right")
+    table.add_column("PPA Distance", justify="right")
+    table.add_column("Score", justify="right")
+
+    for i, r in enumerate(results):
+        table.add_row(
+            str(i + 1),
+            " + ".join(r.modules),
+            f"{r.distance_to_request:.4f}",
+            f"{r.ppa_distance_to_target:.4f}",
+            f"{(r.distance_to_request + r.ppa_distance_to_target) / 2:.4f}",
+        )
+    console.print(table)
+
+    # Gap analysis on best result.
+    if show_gap and results:
+        best = results[0]
+        from specloop.search._embed import embed_query
+        request_vec = embed_query(request, cfg.embed_model)
+        gap = detect_gap(
+            request_vector=request_vec,
+            best_combination=best,
+            qdrant_url=cfg.qdrant_url,
+            collection=cfg.qdrant_collection,
+            embed_model=cfg.embed_model,
+        )
+        if gap.gap_magnitude > 0.1:
+            console.print("\n[yellow]Gap Analysis:[/yellow]")
+            console.print(format_gap_report(gap))
+
+
+@app.command()
+def coverage():
+    """Analyze library coverage — which behavioral domains are well-covered vs sparse."""
+    from specloop.config import SpecloopConfig
+    from specloop.search.coverage_map import compute_coverage_map, format_coverage_report
+
+    cfg = SpecloopConfig()
+
+    with console.status("[bold]Computing coverage map…[/bold]"):
+        report = compute_coverage_map(
+            qdrant_url=cfg.qdrant_url,
+            collection=cfg.qdrant_collection,
+            embed_model=cfg.embed_model,
+        )
+
+    console.print(format_coverage_report(report))
 
 
 def _print_composition_plan(plan) -> None:

@@ -337,6 +337,10 @@ def extract_modules(
     # Configure include search paths on the compilation's source manager.
     # define_files' parent dirs are added so `include "header.vh"` resolves
     # without requiring callers to also list every header directory separately.
+    # sourceManager is only valid after at least one SyntaxTree has been added.
+    # Add a minimal empty tree to initialize it, then register include dirs.
+    _init_tree = pyslang.syntax.SyntaxTree.fromText("")
+    comp.addSyntaxTree(_init_tree)
     comp_sm = comp.sourceManager
     for inc in (include_dirs or []):
         comp_sm.addUserDirectories(str(inc))
