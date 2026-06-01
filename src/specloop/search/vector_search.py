@@ -40,7 +40,7 @@ class VectorCompositionResult(BaseModel):
 
 def _client(qdrant_url: str):
     from qdrant_client import QdrantClient
-    return QdrantClient(url=qdrant_url)
+    return QdrantClient(url=qdrant_url, check_compatibility=False)
 
 
 def retrieve_all_vectors(qdrant_url: str, collection: str) -> dict[str, list[float]]:

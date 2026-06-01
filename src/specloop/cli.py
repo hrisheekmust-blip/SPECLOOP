@@ -531,6 +531,8 @@ def _print_formal_result(formal_result, module: str, title: str = "Formal Result
         f"[bold]{title}[/bold]: [{sty}]{s.upper()}[/{sty}] "
         f"({n}/{total} assertions proved, {formal_result.wall_seconds:.1f}s)"
     )
+    if s == "unknown":
+        console.print("[yellow]prove returned UNKNOWN — retried with bmc[/yellow]")
     if formal_result.failed_assertions:
         console.print("[red]Failing assertions:[/red]")
         for a in formal_result.failed_assertions:
@@ -680,7 +682,8 @@ def training_stats(
     table.add_column("Metric")
     table.add_column("Value", justify="right")
 
-    table.add_row("Proven pairs", str(s["proven_pairs"]))
+    table.add_row("Proven pairs", f"{s['proven_pairs']} ({s['unique_modules']} unique)")
+    table.add_row("Pending pairs", str(s["pending_pairs"]))
     table.add_row("Repair steps", str(s["repair_steps"]))
     table.add_row("  └─ successful repairs", str(s["repair_steps_successful"]))
     table.add_row("Total assertions proven", str(s["total_assertions_proven"]))
@@ -688,6 +691,7 @@ def training_stats(
     table.add_row("Log size", f"{s['log_size_kb']} KB")
 
     console.print(table)
+    console.print("[dim]Pending: SBY failed before proving — not usable for indexing[/dim]")
 
     if s["module_type_breakdown"]:
         console.print("\n[bold]Module types:[/bold]")
@@ -842,7 +846,7 @@ def search_explain(
     from qdrant_client.models import Filter, FieldCondition, MatchValue
 
     cfg = SpecloopConfig()
-    client = QdrantClient(url=cfg.qdrant_url)
+    client = QdrantClient(url=cfg.qdrant_url, check_compatibility=False)
     if not client.collection_exists(cfg.qdrant_collection):
         console.print("[yellow]No collection. Run 'specloop index <module>' first.[/yellow]")
         raise typer.Exit(1)
@@ -889,7 +893,9 @@ def compose(
     out: Optional[Path] = typer.Option(None, "--out", "-o", help="Output directory (default: work/compose/)"),
     top_k: int = typer.Option(3, "--top-k", "-k", help="Qdrant candidates per sub-function"),
     min_confidence: float = typer.Option(0.5, "--min-confidence", help="Min proof confidence for a candidate module"),
-    min_score: float = typer.Option(0.70, "--min-score", help="Min search score; sub-functions below this are skipped"),
+    min_score: float = typer.Option(0.55, "--min-score",
+        help="Min search score (0-1). Lower values include weaker matches. "
+             "Default 0.55 is calibrated for libraries under 100 modules."),
     no_verify: bool = typer.Option(False, "--no-verify", "-n", help="Skip SBY verification"),
     mode: Optional[str] = typer.Option(None, "--mode", help="Formal mode: bmc|prove|cover"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show decomposition plan only, no generation"),
@@ -1050,11 +1056,34 @@ def compose(
         console.print("[dim](Formal verification skipped)[/dim]")
 
     # ── Summary ─────────────────────────────────────────────────────────────
+    if result.skipped_sub_functions:
+        n_total = len(result.plan.sub_functions)
+        n_used = len(result.selected_modules)
+        console.print(
+            f"\n[bold yellow]PARTIAL COMPOSITION:[/bold yellow] "
+            f"{n_used}/{n_total} sub-functions found in library. "
+            f"Results may be incomplete.\n"
+            f"[dim]Run 'specloop coverage' to see library gaps, "
+            f"or lower --min-score to include weaker matches.[/dim]"
+        )
+
     console.print()
-    console.print(f"[bold green]Composition complete![/bold green]")
+    if result.skipped_sub_functions:
+        console.print(f"[bold yellow]Partial composition complete![/bold yellow]")
+    else:
+        console.print(f"[bold green]Composition complete![/bold green]")
     console.print(f"  Wrapper: [cyan]{result.wrapper_sv_path}[/cyan]")
     console.print(f"  Bind:    [cyan]{result.bind_sv_path}[/cyan]")
-    console.print(f"  Confidence: {result.confidence:.2f}")
+
+    if result.formal_result is None:
+        conf_display = "[dim]not verified[/dim]"
+    elif result.formal_result.status == "compile_error":
+        conf_display = "[red]COMPILE_ERROR[/red]"
+    elif result.formal_result.status in ("unknown", "timeout"):
+        conf_display = f"[yellow]{result.formal_result.status.upper()}[/yellow]"
+    else:
+        conf_display = f"{result.confidence:.2f}"
+    console.print(f"  Confidence: {conf_display}")
 
 
 @app.command()
@@ -1074,7 +1103,22 @@ def reindex(
         if p.proof.status != "pending"
     ]
 
-    console.print(f"Re-indexing {len(pairs)} proven modules...")
+    # Deduplicate: keep only the best pair per module (highest proven ratio, then
+    # most proven) so a module specced multiple times is indexed once.
+    best_per_module = {}
+    for p in pairs:
+        key = p.module_name
+        if key not in best_per_module:
+            best_per_module[key] = p
+        else:
+            existing = best_per_module[key]
+            existing_ratio = existing.proof.proven / max(existing.proof.total, 1)
+            new_ratio = p.proof.proven / max(p.proof.total, 1)
+            if (new_ratio, p.proof.proven) > (existing_ratio, existing.proof.proven):
+                best_per_module[key] = p
+    pairs = list(best_per_module.values())
+
+    console.print(f"Re-indexing {len(pairs)} unique proven modules...")
 
     failed = []
     for i, pair in enumerate(pairs):
@@ -1088,6 +1132,104 @@ def reindex(
     console.print(f"\nDone. {len(pairs)-len(failed)} succeeded, {len(failed)} failed.")
     if failed:
         console.print(f"Failed: {failed}")
+
+
+@app.command("index-all")
+def index_all(
+    log: Path = typer.Option(Path("work/training_data.jsonl"), "--log", "-l"),
+):
+    """Index all proven modules into Qdrant. Skips pending and duplicate entries."""
+    from specloop.config import SpecloopConfig
+    from specloop.search.indexer import index_pair
+    from specloop.training.logger import TrainingLogger
+
+    cfg = SpecloopConfig()
+    logger = TrainingLogger(log)
+
+    # Get best proven pair per module (same dedup logic as reindex).
+    all_pairs = [p for p in logger.load_proven_pairs()
+                 if p.proof.status != "pending"]
+
+    best_per_module = {}
+    for p in all_pairs:
+        key = p.module_name
+        if key not in best_per_module:
+            best_per_module[key] = p
+        else:
+            existing = best_per_module[key]
+            existing_ratio = existing.proof.proven / max(existing.proof.total, 1)
+            new_ratio = p.proof.proven / max(p.proof.total, 1)
+            if (new_ratio, p.proof.proven) > (existing_ratio, existing.proof.proven):
+                best_per_module[key] = p
+
+    pairs = list(best_per_module.values())
+
+    if not pairs:
+        console.print("[yellow]No proven pairs found. Run 'specloop spec <module>' first.[/yellow]")
+        raise typer.Exit(0)
+
+    console.print(f"Indexing {len(pairs)} unique proven modules...")
+
+    failed = []
+    for i, pair in enumerate(pairs):
+        try:
+            index_pair(pair, cfg.qdrant_url, cfg.qdrant_collection, cfg.embed_model)
+            console.print(f"[{i+1}/{len(pairs)}] [green]OK[/green]: {pair.module_name} "
+                          f"({pair.proof.proven}/{pair.proof.total} assertions)")
+        except Exception as exc:
+            failed.append(pair.module_name)
+            console.print(f"[{i+1}/{len(pairs)}] [red]FAILED[/red]: {pair.module_name} — {exc}")
+
+    console.print(f"\nDone. {len(pairs)-len(failed)} indexed, {len(failed)} failed.")
+
+
+@app.command("list")
+def list_modules():
+    """List all modules currently indexed in Qdrant with their stats."""
+    from specloop.config import SpecloopConfig
+    from qdrant_client import QdrantClient
+
+    cfg = SpecloopConfig()
+    client = QdrantClient(url=cfg.qdrant_url, check_compatibility=False)
+
+    if not client.collection_exists(cfg.qdrant_collection):
+        console.print("[yellow]No modules indexed yet. Run 'specloop index-all' first.[/yellow]")
+        raise typer.Exit(0)
+
+    points, _ = client.scroll(
+        collection_name=cfg.qdrant_collection,
+        with_payload=True,
+        with_vectors=False,
+        limit=200,
+    )
+
+    if not points:
+        console.print("[yellow]No modules indexed.[/yellow]")
+        raise typer.Exit(0)
+
+    table = Table(title=f"Indexed Modules ({len(points)} total)", show_lines=False)
+    table.add_column("Module", style="cyan")
+    table.add_column("Type")
+    table.add_column("Assertions", justify="right")
+    table.add_column("Confidence", justify="right")
+    table.add_column("Has AXI")
+    table.add_column("Has V/R")
+
+    for pt in sorted(points, key=lambda p: p.payload.get("module_name", "")):
+        p = pt.payload or {}
+        conf = p.get("confidence", 0.0)
+        conf_str = f"{conf:.2f}"
+        has_axi = "yes" if p.get("has_axi") else ""
+        has_vr = "yes" if p.get("has_valid_ready") else ""
+        table.add_row(
+            p.get("module_name", "?"),
+            p.get("module_type", "?"),
+            str(p.get("assertion_count", 0)),
+            conf_str,
+            has_axi,
+            has_vr,
+        )
+    console.print(table)
 
 
 @app.command("vector-compose")

@@ -204,7 +204,7 @@ def index_pair(
         **category_vectors,
     }
 
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(url=qdrant_url, check_compatibility=False)
     ensure_collection(client, collection, len(vector))
     client.upsert(
         collection_name=collection,

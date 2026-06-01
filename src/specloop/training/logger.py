@@ -186,10 +186,14 @@ class TrainingLogger:
     def stats(self) -> dict:
         """Return a summary dict for the CLI stats command."""
         proven: list[dict] = []
+        pending: list[dict] = []
         repair: list[dict] = []
         for raw in self._iter_lines():
             if raw.get("record_type") == "proven_pair":
-                proven.append(raw)
+                if raw.get("proof", {}).get("status") == "pending":
+                    pending.append(raw)
+                else:
+                    proven.append(raw)
             elif raw.get("record_type") == "repair_step":
                 repair.append(raw)
 
@@ -211,6 +215,8 @@ class TrainingLogger:
 
         return {
             "proven_pairs": len(proven),
+            "pending_pairs": len(pending),
+            "unique_modules": len({r.get("module_name") for r in proven}),
             "repair_steps": len(repair),
             "repair_steps_successful": repair_succeeded,
             "total_assertions_proven": total_proven,

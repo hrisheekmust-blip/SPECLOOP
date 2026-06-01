@@ -27,7 +27,7 @@ def _module_payloads(qdrant_url: str, collection: str) -> dict[str, list[str]]:
     """Return {module_name: assertion_summary} for all indexed modules."""
     from qdrant_client import QdrantClient
 
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(url=qdrant_url, check_compatibility=False)
     if not client.collection_exists(collection):
         return {}
 

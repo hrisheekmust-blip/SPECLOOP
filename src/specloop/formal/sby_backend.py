@@ -117,6 +117,36 @@ class SBYBackend(FormalBackend):
                     wall_seconds += wall2
                     combined = combined2  # retry log is more informative
 
+        # 2c. UNKNOWN retry: prove ran out of depth (not a wrong assertion) —
+        # retry once with bmc at half the depth for a faster definitive result.
+        if proc.returncode == _RC_UNKNOWN and mode == "prove":
+            reduced_depth = max(5, self._depth // 2)
+            log.info(
+                "prove returned UNKNOWN — retrying with bmc mode depth=%d",
+                reduced_depth,
+            )
+            bmc_content = _render_sby_config(
+                module_name=module_name,
+                rtl_files=rtl_files,
+                bind_path=bind_abs,
+                mode="bmc",
+                depth=reduced_depth,
+                solver=self._solver,
+                include_dirs=include_dirs,
+            )
+            sby_file.write_text(bmc_content, encoding="utf-8")
+            t0 = time.monotonic()
+            proc_bmc = _run_sby(self._sby, sby_file.name, work_dir, self._timeout)
+            wall_seconds += time.monotonic() - t0
+            combined_bmc = (proc_bmc.stdout or "") + (proc_bmc.stderr or "")
+            # Only adopt the bmc result if it found a real verdict — never
+            # downgrade by overwriting with another UNKNOWN or a compile error.
+            if proc_bmc.returncode not in (_RC_UNKNOWN, _RC_ERROR):
+                proc, combined = proc_bmc, combined_bmc
+                log.info("BMC fallback returned rc=%d", proc_bmc.returncode)
+            else:
+                log.info("BMC fallback also UNKNOWN — keeping original result")
+
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
         rc = proc.returncode

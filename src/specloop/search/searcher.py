@@ -80,7 +80,7 @@ def search(
     from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
     from specloop.search._embed import embed_query
 
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(url=qdrant_url, check_compatibility=False)
     if not client.collection_exists(collection):
         return []
 
@@ -148,7 +148,7 @@ def _scroll_scored(
     from qdrant_client import QdrantClient
     from specloop.search._embed import embed_query
 
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(url=qdrant_url, check_compatibility=False)
     if not client.collection_exists(collection):
         return []
 

@@ -10,3 +10,7 @@ venv/
 *.pyc
 .qdrant-initialized
 ibex_spec_run.log
+*.log
+work/compose/
+synlig.tar.gz
+synlig/synlig.tar.gz

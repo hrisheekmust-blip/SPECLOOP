@@ -218,6 +218,19 @@ class AssertionPipeline:
         if len(ir.always_blocks) <= 2:
             return self.run(ir, rtl_source)
 
+        # Pure-combinational / signal-less modules: if no always block reads or
+        # writes any signal, decomposition has nothing to target — fall back.
+        useful_blocks = [
+            b for b in ir.always_blocks if b.signals_written or b.signals_read
+        ]
+        if not useful_blocks:
+            log.info(
+                "Module '%s' has no useful always blocks for decomposition "
+                "— falling back to standard pipeline",
+                ir.module,
+            )
+            return self.run(ir, rtl_source)
+
         log.info(
             "Decomposed mode: %d always blocks for '%s'", len(ir.always_blocks), ir.module
         )
@@ -235,6 +248,10 @@ class AssertionPipeline:
 
         group_results: list[BindResult] = []
         for i, block in enumerate(ir.always_blocks):
+            # Skip slices whose block touches no signals — nothing to target.
+            if not block.signals_written and not block.signals_read:
+                log.info("Skipping empty slice for block at line %d", block.start_line)
+                continue
             slice_rtl = _slice_rtl(lines, block, header_lines)
             slice_ir = ir.model_copy(update={"always_blocks": [block]})
             log.info(
@@ -424,7 +441,24 @@ def _sanitize_property_assertions(sv: str) -> str:
         inner = re.sub(r"^\s*@\s*\([^)]*\)\s*", "", inner)
         # Strip leading `disable iff (...)`
         inner = re.sub(r"^\s*disable\s+iff\s*\([^)]*\)\s*", "", inner)
-        out.append(f"assert ({inner.strip()})")
+
+        inner_stripped = inner.strip()
+        if not inner_stripped:
+            # Nothing left after stripping the clocking/disable — drop it.
+            log.debug("Skipping empty assert property after sanitization")
+            cursor = end + 1
+            continue
+
+        if "|->" in inner_stripped:
+            # Overlapping implication A |-> B → if (A) assert (B).
+            antecedent, consequent = inner_stripped.split("|->", 1)
+            out.append(f"if ({antecedent.strip()}) assert ({consequent.strip()})")
+        elif "|=>" in inner_stripped:
+            # Non-overlapping (next-cycle) implication — can't express as a plain
+            # immediate assert; drop it rather than emit something incorrect.
+            log.debug("Skipping assert property with |=> (next-cycle implication)")
+        else:
+            out.append(f"assert ({inner_stripped})")
         cursor = end + 1
 
     return "".join(out)

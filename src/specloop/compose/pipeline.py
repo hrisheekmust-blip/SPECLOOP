@@ -32,6 +32,38 @@ class CompositionError(Exception):
     pass
 
 
+def _infer_search_filters(query: str) -> dict:
+    """Infer Qdrant payload filters from keywords in a search query.
+
+    Returns a dict of filter kwargs to pass to search(). Conservative: only
+    activates a filter when the query clearly implies that structural property.
+    """
+    q = query.lower()
+    filters: dict = {}
+
+    axi_keywords = ["axi", "awvalid", "awready", "arvalid", "arready",
+                    "wvalid", "wready", "bvalid", "bready", "rvalid", "rready"]
+    if any(kw in q for kw in axi_keywords):
+        filters["has_axi"] = True
+
+    vr_keywords = ["valid/ready", "valid ready", "handshake", "backpressure",
+                   "flow control", "pipeline stage", "skid buffer"]
+    if any(kw in q for kw in vr_keywords):
+        filters["has_valid_ready"] = True
+
+    seq_keywords = ["register", "flip flop", "sequential", "pipeline",
+                    "stage", "clocked", "synchronous"]
+    if any(kw in q for kw in seq_keywords):
+        filters["module_type"] = "sequential"
+
+    mem_keywords = ["fifo", "buffer", "memory", "ram", "queue", "sram"]
+    if any(kw in q for kw in mem_keywords):
+        # Don't filter to memory only — just note it.
+        pass
+
+    return filters
+
+
 class CompositionPipeline:
     def __init__(
         self,
@@ -164,13 +196,30 @@ class CompositionPipeline:
         skipped: list[str] = []
 
         for sf in plan.sub_functions:
+            # Infer structural filters from the sub-function's search query.
+            search_filters = _infer_search_filters(sf.search_query)
             results = search(
                 sf.search_query,
                 self._qdrant_url,
                 self._collection,
                 self._embed_model,
                 top_k=self._top_k,
+                **search_filters,
             )
+
+            # If the filtered search starves this sub-function, fall back to unfiltered.
+            if len(results) < 2 and search_filters:
+                log.info(
+                    "Filtered search returned %d results for '%s' — falling back to unfiltered",
+                    len(results), sf.search_query,
+                )
+                results = search(
+                    sf.search_query,
+                    self._qdrant_url,
+                    self._collection,
+                    self._embed_model,
+                    top_k=self._top_k,
+                )
 
             if not results:
                 raise CompositionError(

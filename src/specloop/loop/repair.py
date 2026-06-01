@@ -132,14 +132,38 @@ class RepairLoop:
                 ))
                 continue
 
-            # Fix #6: stuck detector — bail if LLM reproduced the same bind module
+            # Fix #6: stuck detector — if the LLM reproduced the same bind module,
+            # try one alternative strategy (simplify the failing assertions) before
+            # giving up, rather than stopping immediately.
             if (hashlib.md5(bind_sv.encode()).hexdigest() ==
                     hashlib.md5(current_bind.bind_module_sv.encode()).hexdigest()):
                 log.warning(
-                    "Repair iter %d: LLM produced identical bind module — stuck, stopping.",
+                    "Repair iter %d: LLM produced identical bind module — trying simplification.",
                     iteration,
                 )
-                break
+                system_simple, user_simple = _render_simplification_prompt(
+                    ir=ir,
+                    rtl_source=rtl_source,
+                    bind_module_sv=current_bind.bind_module_sv,
+                    failed_assertions=current_formal.failed_assertions,
+                )
+                raw_simple = self._client.generate(system_simple, user_simple)
+                data_simple = _parse_json(raw_simple, f"simplify_iter_{iteration}")
+                bind_sv_simple = _sanitize_sv(data_simple.get("bind_module", ""))
+                bind_sv_simple = _sanitize_property_assertions(bind_sv_simple)
+                bind_sv_simple = _sanitize_bind_ports(bind_sv_simple)
+                bind_sv_simple = _hoist_wires_from_always(bind_sv_simple)
+
+                if (not bind_sv_simple or
+                        hashlib.md5(bind_sv_simple.encode()).hexdigest() ==
+                        hashlib.md5(current_bind.bind_module_sv.encode()).hexdigest()):
+                    log.warning("Simplification also stuck — stopping repair loop.")
+                    break
+
+                # Use the simplified version (and its index) for this iteration.
+                bind_sv = bind_sv_simple
+                data = data_simple
+                log.info("Using simplified bind module for next iteration.")
 
             # Build new BindResult
             index_raw = data.get("assertion_index", [])
@@ -239,6 +263,36 @@ def upgrade_to_proven(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _render_simplification_prompt(
+    ir: ModuleIR,
+    rtl_source: str,
+    bind_module_sv: str,
+    failed_assertions: list,
+) -> tuple[str, str]:
+    """Prompt the LLM to SIMPLIFY failing assertions rather than fix them.
+
+    Used when the repair loop is stuck (LLM keeps reproducing the same module).
+    """
+    failed_names = [a.name for a in failed_assertions]
+    system = (
+        "You are a formal verification expert. A repair loop is stuck because "
+        "the same assertion keeps failing. Your job is to SIMPLIFY the failing "
+        "assertions — make them less strict so they can be proven, even if they "
+        "check less. Remove temporal operators, reduce $past depth, replace strict "
+        "equality with range checks. Keep passing assertions exactly as-is. "
+        "Return JSON: {\"bind_module\": \"<full bind module SV>\", "
+        "\"assertion_index\": [{\"name\": str, \"category\": str, \"rationale\": str}]}"
+    )
+    user = (
+        f"Module: {ir.module} ({ir.module_type})\n\n"
+        f"Current bind module:\n{bind_module_sv}\n\n"
+        f"Failing assertions to simplify: {failed_names}\n\n"
+        f"RTL source:\n{rtl_source[:2000]}\n\n"
+        "Simplify only the failing assertions. Keep all passing ones unchanged."
+    )
+    return system, user
+
 
 def _classify_failure(fr: FormalResult) -> str:
     mapping = {
