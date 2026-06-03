@@ -1,9 +1,49 @@
 """Query Qdrant for semantically similar modules."""
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from pydantic import BaseModel
+
+
+# Bus / handshake vocabulary shared across nearly every interface module in the
+# library. Because these terms are repeated heavily in both queries and indexed
+# documents, they dominate the dense embedding and wash out the distinctive
+# *behavioral* terms ("arbiter", "fifo", "counter") that actually discriminate
+# between modules. We strip them from the query to recover the behavioral intent.
+_PROTOCOL_TERMS = [
+    "axi-stream", "axi stream", "axi4-stream", "axi4 stream", "axi-lite",
+    "axistream", "axis", "axi", "wishbone", "apb", "ahb", "wb",
+    "valid/ready", "valid ready", "valid-ready", "ready/valid", "handshake",
+    "backpressure", "back-pressure", "back pressure", "flow control",
+    "tvalid", "tready", "tdata", "tkeep", "tlast", "tuser", "tstrb", "tid",
+    "tdest", "stream",
+]
+# Multi-word / punctuated terms are removed by substring; bare alphanumeric words
+# by word-boundary so a protocol token is never carved out of a larger word.
+_PROTO_MULTI = sorted((t for t in _PROTOCOL_TERMS if not t.isalnum()), key=len, reverse=True)
+_PROTO_WORD_RE = re.compile(
+    r"\b(?:" + "|".join(sorted((t for t in _PROTOCOL_TERMS if t.isalnum()), key=len, reverse=True)) + r")\b"
+)
+
+
+def _behavioral_query(query: str) -> Optional[str]:
+    """Return the query with shared bus/protocol vocabulary removed.
+
+    Returns ``None`` when stripping leaves the query unchanged or empty — i.e. a
+    query with no protocol terms (e.g. "counter") gets no behavioral isolation and
+    search behaves exactly as before.
+    """
+    normalized = re.sub(r"\s+", " ", query.lower()).strip()
+    s = normalized
+    for t in _PROTO_MULTI:
+        s = s.replace(t, " ")
+    s = _PROTO_WORD_RE.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s or s == normalized:
+        return None
+    return s
 
 
 class SearchResult(BaseModel):
@@ -69,12 +109,22 @@ def search(
     has_wide_ports: Optional[bool] = None,
     min_assertion_count: Optional[int] = None,
     require_reset_assertions: Optional[bool] = None,
+    behavioral_weight: float = 0.65,
 ) -> list[SearchResult]:
     """Embed query and return top_k matching modules by cosine similarity.
 
     When any filter is provided, a Qdrant payload filter is applied *before* vector
     similarity so structurally-incompatible modules are excluded. With no filters,
     behavior is identical to before.
+
+    When the query mixes shared bus/protocol vocabulary with behavioral terms (e.g.
+    "AXI-Stream arbiter round robin"), the high-mass protocol terms dominate the
+    dense embedding and bury the module that actually implements the behavior. To
+    counter this, the protocol-stripped query is embedded and blended into the
+    query vector (weight ``behavioral_weight``). Because the indexed vectors are
+    cosine-normalized, sending the single blended vector to Qdrant ranks identically
+    to blending per-document cosines. Queries with no protocol terms (e.g. "counter")
+    are left untouched — behavior is byte-identical to before.
     """
     from qdrant_client import QdrantClient
     from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
@@ -100,6 +150,15 @@ def search(
     qdrant_filter = Filter(must=conditions) if conditions else None
 
     query_vec = embed_query(query, model_name)
+    behavioral = _behavioral_query(query) if behavioral_weight > 0 else None
+    if behavioral is not None:
+        import numpy as np
+
+        beh_vec = embed_query(behavioral, model_name)
+        query_vec = (
+            (1.0 - behavioral_weight) * np.asarray(query_vec)
+            + behavioral_weight * np.asarray(beh_vec)
+        ).tolist()
     response = client.query_points(
         collection_name=collection,
         query=query_vec,

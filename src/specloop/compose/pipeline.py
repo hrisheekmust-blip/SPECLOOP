@@ -33,35 +33,18 @@ class CompositionError(Exception):
 
 
 def _infer_search_filters(query: str) -> dict:
-    """Infer Qdrant payload filters from keywords in a search query.
+    """Infer Qdrant payload *hard* filters from a search query.
 
-    Returns a dict of filter kwargs to pass to search(). Conservative: only
-    activates a filter when the query clearly implies that structural property.
+    Returns no filters by design. The interface properties we could detect here
+    (has_axi, has_valid_ready, sequential) are shared by nearly every bus module,
+    so as hard pre-filters they don't narrow toward what a module *does* — and they
+    actively exclude valid cross-protocol matches (e.g. a generic request/grant
+    arbiter, which has no AXI ports, gets dropped from an "AXI-Stream arbiter"
+    query). Behavioral discrimination now lives in the ranking blend inside
+    ``search()`` (protocol-vocabulary stripping), which orders the full library
+    without excluding anything, so these brittle pre-filters are net-negative.
     """
-    q = query.lower()
-    filters: dict = {}
-
-    axi_keywords = ["axi", "awvalid", "awready", "arvalid", "arready",
-                    "wvalid", "wready", "bvalid", "bready", "rvalid", "rready"]
-    if any(kw in q for kw in axi_keywords):
-        filters["has_axi"] = True
-
-    vr_keywords = ["valid/ready", "valid ready", "handshake", "backpressure",
-                   "flow control", "pipeline stage", "skid buffer"]
-    if any(kw in q for kw in vr_keywords):
-        filters["has_valid_ready"] = True
-
-    seq_keywords = ["register", "flip flop", "sequential", "pipeline",
-                    "stage", "clocked", "synchronous"]
-    if any(kw in q for kw in seq_keywords):
-        filters["module_type"] = "sequential"
-
-    mem_keywords = ["fifo", "buffer", "memory", "ram", "queue", "sram"]
-    if any(kw in q for kw in mem_keywords):
-        # Don't filter to memory only — just note it.
-        pass
-
-    return filters
+    return {}
 
 
 class CompositionPipeline:
