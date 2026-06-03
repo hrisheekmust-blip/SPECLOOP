@@ -119,13 +119,32 @@ def index_pair(
 
     confidence = pair.proof.proven / max(pair.proof.total, 1)
 
-    # PPA vector — recomputed from the embedded ModuleIR (free, no extra plumbing).
+    # PPA vector — measured from real Yosys synthesis when possible (cell count =
+    # area proxy, flip-flop count = sequential-complexity proxy), falling back to
+    # the structural heuristic when synthesis is unavailable, errors, or times out.
+    # Synthesis is best-effort and must never break indexing.
     from specloop.ir.schema import ModuleIR
     from specloop.ppa.features import extract_features
     from specloop.ppa.vector import features_to_vector
 
     module_ir = ModuleIR.model_validate(pair.module_ir)
-    ppa_vector = features_to_vector(extract_features(module_ir))
+
+    synth_cells: int | None = None
+    synth_ffs: int | None = None
+    ppa_source = "heuristic"
+    try:
+        from specloop.ppa.synth import synthesize_stats, vector_from_synth
+
+        stats = synthesize_stats(pair.rtl_source, pair.module_name)
+        if stats is not None:
+            ppa_vector = vector_from_synth(stats, is_memory=pair.module_type == "memory")
+            synth_cells, synth_ffs = stats.cells, stats.ffs
+            ppa_source = "synthesis"
+        else:
+            ppa_vector = features_to_vector(extract_features(module_ir))
+    except Exception:
+        # Any unexpected failure in the synthesis path degrades to the heuristic.
+        ppa_vector = features_to_vector(extract_features(module_ir))
 
     # Hierarchical per-category assertion vectors (None when no assertions in a
     # category) and a structural fingerprint — both stored in the payload so the
@@ -188,6 +207,10 @@ def index_pair(
         "ppa_throughput": ppa_vector.throughput,
         "ppa_area": ppa_vector.area,
         "ppa_power": ppa_vector.power,
+        # Raw synthesis numbers for inspection; None when the heuristic was used.
+        "synth_cells": synth_cells,
+        "synth_ffs": synth_ffs,
+        "ppa_source": ppa_source,
         "structural_fingerprint": struct_fp,
         "assertion_vector": assertion_centroid,
         "assertion_vectors": assertion_vectors,

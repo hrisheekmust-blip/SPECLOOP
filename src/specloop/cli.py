@@ -1103,8 +1103,11 @@ def reindex(
         if p.proof.status != "pending"
     ]
 
-    # Deduplicate: keep only the best pair per module (highest proven ratio, then
-    # most proven) so a module specced multiple times is indexed once.
+    # Deduplicate: keep only the best pair per module so a module specced multiple
+    # times is indexed once. A populated rtl_source is the top priority — some
+    # records were logged with an empty rtl_source, and such a record can otherwise
+    # win the (ratio, proven) tie-break and block Yosys synthesis (empty source ->
+    # heuristic PPA). Fall back to highest proven ratio, then most proven.
     best_per_module = {}
     for p in pairs:
         key = p.module_name
@@ -1114,7 +1117,9 @@ def reindex(
             existing = best_per_module[key]
             existing_ratio = existing.proof.proven / max(existing.proof.total, 1)
             new_ratio = p.proof.proven / max(p.proof.total, 1)
-            if (new_ratio, p.proof.proven) > (existing_ratio, existing.proof.proven):
+            existing_key = (bool(existing.rtl_source.strip()), existing_ratio, existing.proof.proven)
+            new_key = (bool(p.rtl_source.strip()), new_ratio, p.proof.proven)
+            if new_key > existing_key:
                 best_per_module[key] = p
     pairs = list(best_per_module.values())
 
@@ -1159,7 +1164,9 @@ def index_all(
             existing = best_per_module[key]
             existing_ratio = existing.proof.proven / max(existing.proof.total, 1)
             new_ratio = p.proof.proven / max(p.proof.total, 1)
-            if (new_ratio, p.proof.proven) > (existing_ratio, existing.proof.proven):
+            existing_key = (bool(existing.rtl_source.strip()), existing_ratio, existing.proof.proven)
+            new_key = (bool(p.rtl_source.strip()), new_ratio, p.proof.proven)
+            if new_key > existing_key:
                 best_per_module[key] = p
 
     pairs = list(best_per_module.values())
