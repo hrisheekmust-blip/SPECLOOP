@@ -27,7 +27,7 @@ from typing import Literal
 
 from jinja2 import Environment, FileSystemLoader
 
-from specloop.formal.backend import FormalBackend, FormalResult
+from specloop.formal.backend import FormalBackend, FormalResult, finalize_verdict
 from specloop.formal.sby_backend import (
     _LOG_TAIL_LINES,
     _RC_ERROR,
@@ -149,9 +149,9 @@ class SynligBackend(FormalBackend):
         status, failed_names, passed_names, vcd_path = _parse_output(combined, rc, task_dir)
         assertions = _build_assertion_results(assertion_index, failed_names, passed_names, status)
 
-        n_total = len(assertions) if assertions else max(len(assertion_index), 1)
-        n_failed = sum(1 for a in assertions if a.status == "fail")
-        confidence = max(0.0, (n_total - n_failed) / n_total)
+        # A proof over zero proven assertions is vacuous and must never count as a
+        # PASS@1.00 (see finalize_verdict).
+        status, confidence = finalize_verdict(status, assertions)
 
         cex_nl = ""
         if vcd_path and vcd_path.exists():

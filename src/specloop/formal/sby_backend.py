@@ -16,7 +16,7 @@ from typing import Literal
 
 from jinja2 import Environment, FileSystemLoader
 
-from specloop.formal.backend import AssertionResult, FormalBackend, FormalResult
+from specloop.formal.backend import AssertionResult, FormalBackend, FormalResult, finalize_verdict
 from specloop.formal.vcd_parser import vcd_to_nl
 from specloop.training.schema import AssertionEntry
 
@@ -163,10 +163,9 @@ class SBYBackend(FormalBackend):
         # 4. Build assertion result list
         assertions = _build_assertion_results(assertion_index, failed_names, passed_names, status)
 
-        # 5. Confidence = proven / total
-        n_total = len(assertions) if assertions else max(len(assertion_index), 1)
-        n_failed = sum(1 for a in assertions if a.status == "fail")
-        confidence = max(0.0, (n_total - n_failed) / n_total)
+        # 5. Reportable status + confidence. A proof over zero proven assertions
+        #    is vacuous and must never count as a PASS@1.00 (see finalize_verdict).
+        status, confidence = finalize_verdict(status, assertions)
 
         # 6. Parse VCD → natural language
         cex_nl = ""

@@ -42,6 +42,26 @@ class FormalResult(BaseModel):
         return [a for a in self.assertions if a.status == "fail"]
 
 
+def finalize_verdict(
+    status: str, assertions: list[AssertionResult]
+) -> tuple[str, float]:
+    """Compute the reportable (status, confidence) from per-assertion results.
+
+    A proof over zero *proven* assertions is vacuous: SBY/Synlig exit rc=0 on an
+    assertion-free design (e.g. truncated/empty generated assertions, or a module
+    with no assertions at all), which would otherwise surface as PASS@1.00. Such a
+    result is not a verification — force it to not-verified ("unknown") with 0.0
+    confidence; never report it as a pass. Results that prove at least one
+    assertion are scored exactly as before: (total - failed) / total.
+    """
+    n_proven = sum(1 for a in assertions if a.status == "pass")
+    if n_proven == 0:
+        return ("unknown" if status == "pass" else status), 0.0
+    n_total = len(assertions)
+    n_failed = sum(1 for a in assertions if a.status == "fail")
+    return status, max(0.0, (n_total - n_failed) / n_total)
+
+
 class FormalBackend(ABC):
     """Abstract formal verification runner."""
 
