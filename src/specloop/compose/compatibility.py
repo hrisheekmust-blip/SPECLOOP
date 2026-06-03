@@ -66,13 +66,21 @@ class CompatibilityChecker:
 
             if from_port is None:
                 issues.append(CompatibilityIssue(
-                    severity="warning",
-                    message=f"Port '{conn.from_port}' not found in '{conn.from_id}' IR.",
+                    severity="error",
+                    message=(
+                        f"Port '{conn.from_port}' not found on module '{from_ir.module}' "
+                        f"(sub-function '{conn.from_id}') — connection "
+                        f"{conn.from_id}.{conn.from_port} → {conn.to_id}.{conn.to_port} is invalid."
+                    ),
                 ))
             if to_port is None:
                 issues.append(CompatibilityIssue(
-                    severity="warning",
-                    message=f"Port '{conn.to_port}' not found in '{conn.to_id}' IR.",
+                    severity="error",
+                    message=(
+                        f"Port '{conn.to_port}' not found on module '{to_ir.module}' "
+                        f"(sub-function '{conn.to_id}') — connection "
+                        f"{conn.from_id}.{conn.from_port} → {conn.to_id}.{conn.to_port} is invalid."
+                    ),
                 ))
 
             if from_port and to_port:
