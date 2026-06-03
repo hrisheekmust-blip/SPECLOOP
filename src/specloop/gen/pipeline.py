@@ -210,10 +210,16 @@ class AssertionPipeline:
         return examples
 
     def run_decomposed(self, ir: ModuleIR, rtl_source: str) -> BindResult:
-        """Signal-group decomposition (AssertGen): run one pipeline call per always block.
+        """Functional-unit decomposition: one pipeline call per coherent block group.
 
-        Falls through to the standard `run()` when the module has ≤ 2 always blocks,
-        preserving existing behavior for simple modules.
+        Blocks that share signals (one writes what another reads) form a functional
+        unit and are generated together, so each call sees a complete behavioral unit
+        (the whole adder, the whole comparator) and can assert deep cross-block
+        properties instead of shallow per-block ones. See :func:`_group_blocks`.
+
+        Falls through to the standard `run()` when the module has ≤ 2 always blocks
+        or no block touches any signal, preserving existing behavior for simple and
+        signal-less modules.
         """
         if len(ir.always_blocks) <= 2:
             return self.run(ir, rtl_source)
@@ -231,8 +237,10 @@ class AssertionPipeline:
             )
             return self.run(ir, rtl_source)
 
+        groups = _group_blocks(ir.always_blocks)
         log.info(
-            "Decomposed mode: %d always blocks for '%s'", len(ir.always_blocks), ir.module
+            "Decomposed mode: %d always blocks → %d functional unit(s) for '%s'",
+            len(ir.always_blocks), len(groups), ir.module,
         )
 
         # Stage 0 runs once over the whole module
@@ -247,17 +255,16 @@ class AssertionPipeline:
         header_lines = lines[: header_end]
 
         group_results: list[BindResult] = []
-        for i, block in enumerate(ir.always_blocks):
-            # Skip slices whose block touches no signals — nothing to target.
-            if not block.signals_written and not block.signals_read:
-                log.info("Skipping empty slice for block at line %d", block.start_line)
+        for i, group in enumerate(groups):
+            # Skip groups whose blocks touch no signals — nothing to target.
+            if not any(b.signals_written or b.signals_read for b in group):
                 continue
-            slice_rtl = _slice_rtl(lines, block, header_lines)
-            slice_ir = ir.model_copy(update={"always_blocks": [block]})
+            slice_rtl = _slice_rtl(lines, group, header_lines)
+            slice_ir = ir.model_copy(update={"always_blocks": group})
             log.info(
-                "  Group %d/%d: %s @(%s)",
-                i + 1, len(ir.always_blocks), block.kind,
-                ", ".join(block.sensitivity) if block.sensitivity else "*",
+                "  Unit %d/%d: %d block(s) writing {%s}",
+                i + 1, len(groups), len(group),
+                ", ".join(sorted({s for b in group for s in b.signals_written})[:8]),
             )
             behavior = self._stage1_behavior(slice_ir, slice_rtl, spec=spec)
             synthesis = self._stage2_synthesis(slice_ir, slice_rtl, behavior, spec=spec)
@@ -275,22 +282,94 @@ class AssertionPipeline:
 # Decomposition helpers
 # ---------------------------------------------------------------------------
 
+# Max always blocks per functional unit. Caps the LLM context so each call stays
+# focused, and — critically — stops a fan-in block (a final output mux that reads
+# every unit's result) from transitively merging the whole module into one group.
+_MAX_GROUP_SIZE = 4
+
+
+def _group_blocks(blocks: list) -> list[list]:
+    """Group always blocks into functional units by signal-sharing dependency.
+
+    Two blocks belong to the same unit when one writes a signal the other reads —
+    that producer→consumer link is what makes a set of blocks a coherent behavioral
+    unit (operand-prep → adder, cmp_signed → is_greater_equal → cmp_result). Blocks
+    that share nothing stay separate.
+
+    Grouping is greedy union-find over signal-sharing edges processed strongest-first,
+    rejecting any merge that would exceed ``_MAX_GROUP_SIZE``. The cap is what keeps a
+    high-fan-in output mux (which reads every unit's result and would otherwise pull
+    all units into a single component) from collapsing the decomposition: once a unit
+    is full, further merges into it are skipped and the remaining blocks form their
+    own units. Deterministic: edge weight then source-line order break all ties.
+
+    Returns groups ordered by their earliest block's source position.
+    """
+    n = len(blocks)
+    written = [set(b.signals_written) for b in blocks]
+    read = [set(b.signals_read) for b in blocks]
+
+    # Weighted producer↔consumer edges: weight = #signals one writes and the other
+    # reads, summed over both directions. No shared signal → no edge.
+    edges: list[tuple[int, int, int]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            shared = len(written[i] & read[j]) + len(written[j] & read[i])
+            if shared:
+                edges.append((shared, i, j))
+    edges.sort(key=lambda e: (-e[0], e[1], e[2]))
+
+    parent = list(range(n))
+    size = [1] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for _w, i, j in edges:
+        ri, rj = find(i), find(j)
+        if ri == rj:
+            continue
+        if size[ri] + size[rj] > _MAX_GROUP_SIZE:
+            continue  # merge would overflow the unit — keep them separate
+        parent[rj] = ri
+        size[ri] += size[rj]
+
+    groups: dict[int, list] = {}
+    for idx in range(n):
+        groups.setdefault(find(idx), []).append(blocks[idx])
+    # Order groups (and blocks within them) by source position for stable slicing.
+    ordered = sorted(groups.values(), key=lambda g: min(b.start_line for b in g))
+    for g in ordered:
+        g.sort(key=lambda b: b.start_line)
+    return ordered
+
+
 def _first_block_line(blocks: list, n_lines: int) -> int:
     """Return the 0-based line index of the first always block, or n_lines if unknown."""
-    for b in blocks:
-        if b.start_line > 0:
-            return b.start_line - 1  # start_line is 1-based
+    starts = [b.start_line for b in blocks if b.start_line > 0]
+    if starts:
+        return min(starts) - 1  # start_line is 1-based
     return n_lines
 
 
-def _slice_rtl(lines: list[str], block, header_lines: list[str]) -> str:
-    """Build a focused RTL slice: module header + this always block's source lines."""
-    if block.start_line > 0 and block.end_line >= block.start_line:
-        block_lines = lines[block.start_line - 1 : block.end_line]
-    else:
+def _slice_rtl(lines: list[str], group: list, header_lines: list[str]) -> str:
+    """Build a focused RTL slice: module header + every always block in the group.
+
+    Non-contiguous blocks are joined with an omission marker so the LLM sees the
+    whole functional unit's source while ignoring unrelated blocks.
+    """
+    bodies: list[str] = []
+    for block in sorted(group, key=lambda b: b.start_line):
+        if block.start_line > 0 and block.end_line >= block.start_line:
+            bodies.append("\n".join(lines[block.start_line - 1 : block.end_line]))
+    if not bodies:
         # Fallback: return full source when line numbers are unavailable
         return "\n".join(lines)
-    return "\n".join(header_lines + ["  // ... (other always blocks omitted) ..."] + block_lines)
+    marker = "  // ... (other always blocks omitted) ..."
+    return "\n".join(header_lines + [marker] + [("\n" + marker + "\n").join(bodies)])
 
 
 def _prefix_assertions(result: BindResult, prefix: str) -> BindResult:
@@ -302,35 +381,68 @@ def _prefix_assertions(result: BindResult, prefix: str) -> BindResult:
     return result.model_copy(update={"bind_module_sv": sv, "assertion_index": index})
 
 
+def _split_spec_module(sv: str) -> tuple[str, str, str]:
+    """Split one group's bind module into (port_decl, preamble, always_section).
+
+    `preamble` is the module-level declarations (imports, decode wires/assigns)
+    between the port list and the first `always`; `always_section` is everything
+    from the first `always` keyword to the closing `endmodule`. Splitting on the
+    first `always` is robust to nesting and to any always form (`@(posedge clk)`,
+    `@(*)`, `always_comb`) because the section is never parsed internally.
+    """
+    m = re.search(r"module\s+\w+\s*\((.*?)\)\s*;", sv, re.DOTALL)
+    port_decl = m.group(1).strip() if m else ""
+    body_start = m.end() if m else 0
+
+    end_idx = sv.rfind("endmodule")
+    body = sv[body_start:end_idx] if end_idx != -1 else sv[body_start:]
+
+    am = re.search(r"\balways(_ff|_comb|_latch)?\b", body)
+    if am:
+        return port_decl, body[: am.start()], body[am.start():]
+    return port_decl, body, ""
+
+
 def _merge_bind_results(
     results: list[BindResult], module_name: str, spec: Optional[ModuleSpec] = None
 ) -> BindResult:
-    """Merge per-group bind results into a single bind module."""
-    if not results:
-        return BindResult(bind_module_sv=f"// no groups\n", assertion_index=[])
+    """Merge per-group bind results into a single bind module.
 
-    # Collect all always blocks from each group's bind module
-    always_block_re = re.compile(
-        r"(always\s+@\s*\(posedge\b[^)]*\)\s*begin.*?end)", re.DOTALL
-    )
-    merged_blocks: list[str] = []
+    All groups are generated from the same ports, so their module-level decode-wire
+    preambles are largely identical; preamble lines are unioned (exact-line dedup,
+    first-seen order) so every group's assertions still see the wires they need
+    without redeclaration errors. Each group's always section — whether clocked or
+    combinational — is concatenated verbatim, so combinational `@(*)` assertion
+    blocks survive the merge (the old posedge-only extractor dropped them).
+    """
+    if not results:
+        return BindResult(bind_module_sv="// no groups\n", assertion_index=[])
+
+    port_decl = "input logic clk"
+    preamble_lines: list[str] = []
+    seen: set[str] = set()
+    always_sections: list[str] = []
     merged_index: list = []
-    for r in results:
-        merged_blocks.extend(always_block_re.findall(r.bind_module_sv))
+
+    for k, r in enumerate(results):
+        pd, preamble, always_section = _split_spec_module(r.bind_module_sv)
+        if k == 0 and pd:
+            port_decl = pd
+        for line in preamble.splitlines():
+            key = line.strip()
+            if key and key not in seen:
+                seen.add(key)
+                preamble_lines.append(line.rstrip())
+        if always_section.strip():
+            always_sections.append(always_section.strip())
         merged_index.extend(r.assertion_index)
 
-    # Use port list from first result's bind module header
-    first_sv = results[0].bind_module_sv
-    port_match = re.search(
-        r"module\s+\w+\s*\((.*?)\)\s*;", first_sv, re.DOTALL
-    )
-    port_decl = port_match.group(1).strip() if port_match else "input logic clk"
-
-    blocks_sv = "\n\n  ".join(merged_blocks)
+    preamble_sv = ("\n".join(preamble_lines) + "\n\n") if preamble_lines else ""
     bind_sv = (
         f"module {module_name}_spec (\n  {port_decl}\n);\n\n"
-        f"  {blocks_sv}\n\n"
-        f"endmodule\n\n"
+        f"{preamble_sv}"
+        f"{chr(10).join(s + chr(10) for s in always_sections)}"
+        f"\nendmodule\n\n"
         f"bind {module_name} {module_name}_spec spec_inst (.*);\n"
     )
     return BindResult(

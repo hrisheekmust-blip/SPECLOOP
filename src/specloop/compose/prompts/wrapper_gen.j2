@@ -8,6 +8,9 @@ CRITICAL RTL RULES:
 - Use `logic` for all internal signal declarations
 - Declare ALL internal wires explicitly before the instantiations
 - Use explicit named port connections (.port_name(signal)) on every instantiation
+- FIXED CONNECTIONS (when listed below) are already correct by protocol analysis: wire
+  each named port to EXACTLY the signal given, and declare the exact top-level ports,
+  internal wires, and assigns listed. Do not rename, reroute, or re-derive them.
 - Route the same clock signal to every sub-module instance
 - Route reset to every sub-module instance; if reset polarity differs between modules,
   add: assign <name>_rst_inv = ~<name>_rst;  and connect the inverted signal where needed
@@ -54,6 +57,47 @@ Parameters:
 
 {% endfor %}
 
+{% if protocol.has_any %}
+## FIXED CONNECTIONS — already determined (DO NOT CHANGE)
+These were derived deterministically from the protocol interfaces and are correct
+by construction. Declare exactly these signals and wire exactly these ports.
+
+### Top-level ports — declare these in the module header, verbatim
+{% for t in protocol.top_ports %}
+  {{ t.direction }} logic {{ t.name }}  // {{ t.comment }}
+{% endfor %}
+
+### Internal wires — declare these before the instantiations
+{% for w in protocol.internal_wires %}
+  {% if w.width > 1 %}logic [{{ w.width - 1 }}:0] {{ w.name }};{% else %}logic {{ w.name }};{% endif %}  // {{ w.comment }}
+{% endfor %}
+{% for a in protocol.extra_assigns %}
+  assign {{ a.lhs }} = {{ a.rhs }};  // {{ a.comment }}
+{% endfor %}
+
+### Fixed instance port connections — use these signals exactly
+{% for inst, binds in fixed_by_instance.items() %}
+inst_{{ inst }}:
+{% for b in binds %}
+    .{{ b.port }}({{ b.signal }})  // {{ b.comment }}
+{% endfor %}
+{% endfor %}
+
+## Ports you must wire yourself — everything NOT fixed above
+For each remaining port, decide whether it is a new top-level wrapper port or an
+internal connection to another instance, then wire it. Do not touch the fixed ports.
+{% if leftovers %}
+{% for inst, ports in leftovers.items() %}
+inst_{{ inst }}:
+{% for p in ports %}
+  {{ "%-8s"|format(p.direction) }} {% if p.width > 1 %}logic [{{ p.width - 1 }}:0] {% else %}logic         {% endif %}{{ p.name }}
+{% endfor %}
+{% endfor %}
+{% else %}
+(none — every port was fixed by protocol analysis)
+{% endif %}
+{% endif %}
+
 ## Inter-module connections (these become internal wires, NOT top-level ports)
 {% if plan.connections %}
 {% for conn in plan.connections %}
@@ -72,11 +116,19 @@ Parameters:
 
 ## Wrapper output requirements
 1. `module {{ plan.composition_name }} (` with top-level port list:
+{% if protocol.has_any %}
+   - The fixed top-level ports listed above, declared verbatim
+   - Plus any leftover ports you choose to expose at the top level
+{% else %}
    - Clock port (input logic clk)
    - Reset port (input logic rst_n, or rst — match whatever the sub-modules use)
    - All sub-module ports that are NOT listed in inter-module connections above
-2. Internal wire declarations for every inter-module connection
-3. Instantiation of EVERY sub-module listed above, with full explicit named port connections
+{% endif %}
+2. Internal wire declarations for every inter-module connection{% if protocol.has_any %} (including every fixed internal wire listed above){% endif %}
+
+3. Instantiation of EVERY sub-module listed above, with full explicit named port connections.
+{% if protocol.has_any %}   For each instance, the fixed ports MUST use the exact signals listed above; wire only the leftover ports yourself.{% endif %}
+
 4. `endmodule` at the very end
 5. Output ONLY the SystemVerilog source — no JSON, no markdown, no explanation
 {% endset %}

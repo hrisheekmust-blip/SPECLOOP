@@ -117,10 +117,11 @@ class CompositionPipeline:
         wrapper_path.write_text(wrapper_sv, encoding="utf-8")
         log.info("Wrapper written to %s", wrapper_path)
 
-        # Step 5: Composition assertions
+        # Step 5: Composition assertions (inheriting each component's proven
+        # properties from its bind module in work_dir; interaction layer is new).
         log.info("Step 5: generating composition assertions")
         bind_result = CompositionAssertionGenerator(self._client).generate(
-            request, plan, selected, wrapper_sv
+            request, plan, selected, wrapper_sv, work_dir=work_dir
         )
         bind_path = out_dir / f"{plan.composition_name}.bind.sv"
         bind_path.write_text(bind_result.bind_module_sv, encoding="utf-8")

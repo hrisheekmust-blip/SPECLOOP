@@ -229,6 +229,7 @@ def spec(
     sby_debug: bool = typer.Option(False, "--sby-debug", help="Print raw SBY stdout/stderr"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print prompts without calling LLM"),
     no_rtl_source: bool = typer.Option(False, "--no-rtl-source", help="Omit raw RTL from prompts; send IR JSON only (reduces token usage)"),
+    decompose: bool = typer.Option(False, "--decompose", help="Group always blocks into functional units and generate deep assertions per unit (best for large multi-function modules)"),
 ):
     """Generate SVA assertions, run formal verification, and repair failures."""
     from specloop.config import SpecloopConfig
@@ -280,7 +281,10 @@ def spec(
     with console.status(f"[bold]Generating assertions for [cyan]{module}[/cyan]…[/bold]"):
         try:
             pipeline = AssertionPipeline(client)
-            bind_result = pipeline.run(ir, rtl_source)
+            if decompose:
+                bind_result = pipeline.run_decomposed(ir, rtl_source)
+            else:
+                bind_result = pipeline.run(ir, rtl_source)
         except Exception as exc:
             console.print(f"[red]Assertion pipeline failed: {exc}[/red]")
             raise typer.Exit(1)
@@ -635,6 +639,7 @@ def spec_all(
                 sby_debug=False,
                 dry_run=False,
                 no_rtl_source=no_rtl_source,
+                decompose=False,
             )
             results[name] = "ok"
         except typer.Exit as e:

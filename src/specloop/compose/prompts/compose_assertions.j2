@@ -39,11 +39,20 @@ RULES:
   `if ($past(1'b1))` or a real signal guard to suppress the first-cycle X
 
 COMPOSITION-SPECIFIC MANDATE:
-Your assertions MUST focus on the bugs that composition uniquely introduces — bugs that
-neither module's individual formal proof could detect. Generate assertions in this exact
-priority order:
+Each component module already has FORMALLY PROVEN properties. Do not reinvent or
+re-derive them — inherit them. Your own reasoning is spent on the INTERACTION layer:
+the properties that emerge only from connecting the modules, which neither proves alone.
+Generate assertions in this exact priority order:
 
-PRIORITY 1 — CONNECTIVITY ASSERTIONS (generate ALL of these first):
+PRIORITY 0 — INHERITED PROVEN PROPERTIES (emit these first, exactly as given):
+  Each "Inherited proven properties" block below lists properties already proven for a
+  component. Re-emit every one in the bind module, rewriting each component-local signal
+  X into the hierarchical reference inst_<id>.X (so `count` from instance inst_buf
+  becomes `inst_buf.count`), and preserving its guard and expression unchanged. These are
+  proven facts — do NOT weaken, drop, or "improve" them. Use the wrapper's own clk/reset
+  for the clocking and reset guards. Category: "inherited".
+
+PRIORITY 1 — CONNECTIVITY ASSERTIONS (generate ALL of these first among NEW assertions):
   For EVERY declared inter-module connection, assert that the driving port equals the
   receiving port signal on every clock cycle after reset deasserts. These catch wiring
   bugs invisible to individual module proofs.
@@ -68,7 +77,7 @@ PRIORITY 3 — SYSTEM-LEVEL ASSERTIONS (generate last):
 Emit a JSON object with fields:
 {"bind_module": "<full SV bind module source>", "assertion_index": [{"name": "...", "category": "...", "rationale": "..."}]}
 
-Use category values: "connectivity", "protocol", "system" matching the three priority tiers.
+Use category values: "inherited", "connectivity", "protocol", "system" matching the priority tiers.
 {% endset %}
 
 {% set user %}
@@ -93,6 +102,22 @@ Proven assertions for this module (use as hints for PRIORITY 2 boundary checks):
 
 {% endfor %}
 
+{% if inherited %}
+## Inherited proven properties (PRIORITY 0) — re-emit each, rewriting signals to inst_<id>.<signal>
+These are ALREADY FORMALLY PROVEN for their component. Re-emit every one in the bind
+module with its guard and expression preserved exactly; only rewrite each component-local
+signal `X` to `inst_<id>.X`. Do not invent new versions of these — they are given facts.
+{% for ip in inherited %}
+### inst_{{ ip.sub_function_id }} ({{ ip.module }}) — {{ ip.inheritable | length }} proven to inherit
+{% for a in ip.inheritable %}
+  {{ a.label }}: {% if a.guards %}when ({{ a.guards | join(' && ') }}) {% endif %}assert({{ a.expr }})
+{% endfor %}
+{% if ip.temporal_skipped %}
+  [skipped {{ ip.temporal_skipped | length }} timing-dependent (do NOT inherit): {{ ip.temporal_skipped | join(', ') }}]
+{% endif %}
+{% endfor %}
+{% endif %}
+
 ## Inter-module connections — GENERATE ONE PRIORITY 1 ASSERTION PER LINE
 {% if plan.connections %}
 {% for conn in plan.connections %}
@@ -113,7 +138,8 @@ between instances and generate assertions for any obvious data-path connections)
 - Bind module name: `{{ plan.composition_name }}_spec`
 - Bind line: `bind {{ plan.composition_name }} {{ plan.composition_name }}_spec spec_inst(.*);`
 - Ports: at minimum `input logic clk` and reset matching the wrapper's reset port
-- Generate assertions in priority order: connectivity first, boundary protocol second, system-level third
+- Generate assertions in priority order: inherited proven properties first (if any), then
+  connectivity, then boundary protocol, then system-level
 - Every assert MUST be inside `always @(posedge clk) begin ... end`, guarded by reset inactive
 - Use `assert(<expr>)` only — NEVER `assert property(...)` or any SVA property syntax
 - No `function`, `task`, or `class` — use `wire`/`assign` for any decode logic
