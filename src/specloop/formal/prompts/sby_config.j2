@@ -13,7 +13,7 @@ read -incdir {{ d }}
 read -sv {{ f.name }}
 {% endfor %}
 read -sv -formal {{ bind_path.name }}
-prep -top {{ module_name }}
+prep -top {{ module_name }}{% if flatten %} -flatten{% endif %}
 
 [files]
 {% for f in rtl_files %}

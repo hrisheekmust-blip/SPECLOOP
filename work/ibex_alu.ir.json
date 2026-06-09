@@ -1,0 +1,482 @@
+{
+  "schema_version": "specloop.ir/v1",
+  "module": "ibex_alu",
+  "file": "ibex/rtl/ibex_alu.sv",
+  "lines": [
+    9,
+    1400
+  ],
+  "parameters": [
+    {
+      "name": "RV32B",
+      "type": "int",
+      "default": "<unset>",
+      "is_local": false
+    }
+  ],
+  "ports": [
+    {
+      "name": "operator_i",
+      "direction": "input",
+      "width": 0,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "operand_a_i",
+      "direction": "input",
+      "width": 32,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "operand_b_i",
+      "direction": "input",
+      "width": 32,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "instr_first_cycle_i",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "multdiv_operand_a_i",
+      "direction": "input",
+      "width": 33,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "multdiv_operand_b_i",
+      "direction": "input",
+      "width": 33,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "multdiv_sel_i",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "imd_val_q_i",
+      "direction": "input",
+      "width": 64,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "imd_val_d_o",
+      "direction": "output",
+      "width": 64,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "imd_val_we_o",
+      "direction": "output",
+      "width": 2,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "adder_result_o",
+      "direction": "output",
+      "width": 32,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "adder_result_ext_o",
+      "direction": "output",
+      "width": 34,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "result_o",
+      "direction": "output",
+      "width": 32,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "comparison_result_o",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "is_equal_result_o",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    }
+  ],
+  "always_blocks": [
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 55,
+      "end_line": 81,
+      "signals_written": [
+        "adder_op_a_shift1",
+        "adder_op_a_shift2",
+        "adder_op_a_shift3",
+        "adder_op_b_negate"
+      ],
+      "signals_read": [
+        "ALU_EQ",
+        "ALU_GE",
+        "ALU_GEU",
+        "ALU_LT",
+        "ALU_LTU",
+        "ALU_MAX",
+        "ALU_MAXU",
+        "ALU_MIN",
+        "ALU_MINU",
+        "ALU_NE",
+        "ALU_SH1ADD",
+        "ALU_SH2ADD",
+        "ALU_SH3ADD",
+        "ALU_SLT",
+        "ALU_SLTU",
+        "ALU_SUB",
+        "RV32B",
+        "RV32BNone",
+        "operator_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 84,
+      "end_line": 92,
+      "signals_written": [
+        "adder_in_a"
+      ],
+      "signals_read": [
+        "adder_op_a_shift1",
+        "adder_op_a_shift2",
+        "adder_op_a_shift3",
+        "multdiv_operand_a_i",
+        "multdiv_sel_i",
+        "operand_a_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 96,
+      "end_line": 102,
+      "signals_written": [
+        "adder_in_b"
+      ],
+      "signals_read": [
+        "adder_op_b_negate",
+        "multdiv_operand_b_i",
+        "multdiv_sel_i",
+        "operand_b_i",
+        "operand_b_neg"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 119,
+      "end_line": 130,
+      "signals_written": [
+        "cmp_signed"
+      ],
+      "signals_read": [
+        "ALU_GE",
+        "ALU_LT",
+        "ALU_MAX",
+        "ALU_MIN",
+        "ALU_SLT",
+        "operator_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 136,
+      "end_line": 142,
+      "signals_written": [
+        "is_greater_equal"
+      ],
+      "signals_read": [
+        "adder_result",
+        "cmp_signed",
+        "operand_a_i",
+        "operand_b_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 159,
+      "end_line": 171,
+      "signals_written": [
+        "cmp_result"
+      ],
+      "signals_read": [
+        "ALU_EQ",
+        "ALU_GE",
+        "ALU_GEU",
+        "ALU_LT",
+        "ALU_LTU",
+        "ALU_MAX",
+        "ALU_MAXU",
+        "ALU_MIN",
+        "ALU_MINU",
+        "ALU_NE",
+        "ALU_SLT",
+        "ALU_SLTU",
+        "is_equal",
+        "is_greater_equal",
+        "operator_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 282,
+      "end_line": 290,
+      "signals_written": [
+        "shift_amt"
+      ],
+      "signals_read": [
+        "bfp_off",
+        "bfp_op",
+        "instr_first_cycle_i",
+        "operand_b_i",
+        "shift_amt_compl",
+        "shift_funnel"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 304,
+      "end_line": 320,
+      "signals_written": [
+        "shift_left"
+      ],
+      "signals_read": [
+        "ALU_BFP",
+        "ALU_FSL",
+        "ALU_FSR",
+        "ALU_ROL",
+        "ALU_ROR",
+        "ALU_SLL",
+        "ALU_SLO",
+        "RV32B",
+        "RV32BFull",
+        "RV32BNone",
+        "RV32BOTEarlGrey",
+        "instr_first_cycle_i",
+        "operator_i",
+        "shift_amt",
+        "shift_sbmode"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 329,
+      "end_line": 355,
+      "signals_written": [
+        "shift_operand",
+        "shift_result",
+        "shift_result_ext",
+        "shift_result_ext_signed",
+        "shift_result_rev",
+        "unused_shift_result_ext"
+      ],
+      "signals_read": [
+        "RV32B",
+        "RV32BNone",
+        "bfp_mask_rev",
+        "bfp_op",
+        "i",
+        "operand_a_i",
+        "operand_a_rev",
+        "shift_amt",
+        "shift_arith",
+        "shift_left",
+        "shift_ones",
+        "shift_sbmode"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 371,
+      "end_line": 380,
+      "signals_written": [
+        "bwlogic_op_b_negate"
+      ],
+      "signals_read": [
+        "ALU_ANDN",
+        "ALU_CMIX",
+        "ALU_ORN",
+        "ALU_XNOR",
+        "RV32B",
+        "RV32BNone",
+        "instr_first_cycle_i",
+        "operator_i"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 391,
+      "end_line": 397,
+      "signals_written": [
+        "bwlogic_result"
+      ],
+      "signals_read": [
+        "bwlogic_and",
+        "bwlogic_and_result",
+        "bwlogic_or",
+        "bwlogic_or_result",
+        "bwlogic_xor_result"
+      ]
+    },
+    {
+      "kind": "always_comb",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 1319,
+      "end_line": 1395,
+      "signals_written": [
+        "result_o"
+      ],
+      "signals_read": [
+        "ALU_ADD",
+        "ALU_AND",
+        "ALU_ANDN",
+        "ALU_BCLR",
+        "ALU_BCOMPRESS",
+        "ALU_BDECOMPRESS",
+        "ALU_BEXT",
+        "ALU_BFP",
+        "ALU_BINV",
+        "ALU_BSET",
+        "ALU_CLMUL",
+        "ALU_CLMULH",
+        "ALU_CLMULR",
+        "ALU_CLZ",
+        "ALU_CMIX",
+        "ALU_CMOV",
+        "ALU_CPOP",
+        "ALU_CRC32C_B",
+        "ALU_CRC32C_H",
+        "ALU_CRC32C_W",
+        "ALU_CRC32_B",
+        "ALU_CRC32_H",
+        "ALU_CRC32_W",
+        "ALU_CTZ",
+        "ALU_EQ",
+        "ALU_FSL",
+        "ALU_FSR",
+        "ALU_GE",
+        "ALU_GEU",
+        "ALU_GORC",
+        "ALU_GREV",
+        "ALU_LT",
+        "ALU_LTU",
+        "ALU_MAX",
+        "ALU_MAXU",
+        "ALU_MIN",
+        "ALU_MINU",
+        "ALU_NE",
+        "ALU_OR",
+        "ALU_ORN",
+        "ALU_PACK",
+        "ALU_PACKH",
+        "ALU_PACKU",
+        "ALU_ROL",
+        "ALU_ROR",
+        "ALU_SEXTB",
+        "ALU_SEXTH",
+        "ALU_SH1ADD",
+        "ALU_SH2ADD",
+        "ALU_SH3ADD",
+        "ALU_SHFL",
+        "ALU_SLL",
+        "ALU_SLO",
+        "ALU_SLT",
+        "ALU_SLTU",
+        "ALU_SRA",
+        "ALU_SRL",
+        "ALU_SRO",
+        "ALU_SUB",
+        "ALU_UNSHFL",
+        "ALU_XNOR",
+        "ALU_XOR",
+        "ALU_XPERM_B",
+        "ALU_XPERM_H",
+        "ALU_XPERM_N",
+        "adder_result",
+        "bfp_result",
+        "bitcnt_result",
+        "bwlogic_result",
+        "clmul_result",
+        "cmp_result",
+        "minmax_result",
+        "multicycle_result",
+        "operator_i",
+        "pack_result",
+        "rev_result",
+        "sext_result",
+        "shift_result",
+        "shuffle_result",
+        "singlebit_result",
+        "xperm_result"
+      ]
+    }
+  ],
+  "submodules": [],
+  "imports": [
+    "import"
+  ],
+  "module_type": "combinational",
+  "parse_status": "ok",
+  "confidence": 1.0
+}

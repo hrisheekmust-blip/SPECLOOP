@@ -44,12 +44,17 @@ class SBYBackend(FormalBackend):
         depth: int = 20,
         solver: str = "",
         debug: bool = False,
+        flatten: bool = False,
     ) -> None:
         self._sby = sby_path
         self._timeout = timeout
         self._depth = depth
         self._solver = solver
         self._debug = debug
+        # Flatten the hierarchy before proving. Off for single-module spec/prove;
+        # on for compositions, where flatten-then-prove lets a wrapper's carried
+        # component assertions + cross-boundary properties close by k-induction.
+        self._flatten = flatten
 
     def run(
         self,
@@ -84,6 +89,7 @@ class SBYBackend(FormalBackend):
                 depth=self._depth,
                 solver=self._solver,
                 include_dirs=include_dirs,
+                flatten=self._flatten,
             )
             sby_file.write_text(sby_content, encoding="utf-8")
             log.debug("Wrote SBY config: %s (stubs=%s)", sby_file, [p.name for p in extra_files])
@@ -133,6 +139,7 @@ class SBYBackend(FormalBackend):
                 depth=reduced_depth,
                 solver=self._solver,
                 include_dirs=include_dirs,
+                flatten=self._flatten,
             )
             sby_file.write_text(bmc_content, encoding="utf-8")
             t0 = time.monotonic()
@@ -337,6 +344,7 @@ def _render_sby_config(
     depth: int,
     solver: str,
     include_dirs: list[Path] | None = None,
+    flatten: bool = False,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(_PROMPTS_DIR)),
@@ -352,6 +360,7 @@ def _render_sby_config(
         depth=depth,
         solver=solver,
         include_dirs=include_dirs or [],
+        flatten=flatten,
     )
 
 

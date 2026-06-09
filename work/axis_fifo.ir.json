@@ -1,0 +1,491 @@
+{
+  "schema_version": "specloop.ir/v1",
+  "module": "axis_fifo",
+  "file": "corpus/verilog-axis/rtl/axis_fifo.v",
+  "lines": [
+    34,
+    564
+  ],
+  "parameters": [
+    {
+      "name": "DEPTH",
+      "type": "int",
+      "default": "256",
+      "is_local": false
+    },
+    {
+      "name": "DATA_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "KEEP_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "KEEP_WIDTH",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "LAST_ENABLE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "ID_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "ID_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "DEST_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "DEST_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "USER_ENABLE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "USER_WIDTH",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "RAM_PIPELINE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "OUTPUT_FIFO_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "FRAME_FIFO",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "USER_BAD_FRAME_VALUE",
+      "type": "int",
+      "default": "1'b1",
+      "is_local": false
+    },
+    {
+      "name": "USER_BAD_FRAME_MASK",
+      "type": "int",
+      "default": "1'b1",
+      "is_local": false
+    },
+    {
+      "name": "DROP_OVERSIZE_FRAME",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "DROP_BAD_FRAME",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "DROP_WHEN_FULL",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "MARK_WHEN_FULL",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "PAUSE_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "FRAME_PAUSE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "ADDR_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": true
+    },
+    {
+      "name": "CL_KEEP_WDITH",
+      "type": "int",
+      "default": "0",
+      "is_local": true
+    },
+    {
+      "name": "OUTPUT_FIFO_ADDR_WIDTH",
+      "type": "int",
+      "default": "3",
+      "is_local": true
+    },
+    {
+      "name": "KEEP_OFFSET",
+      "type": "int",
+      "default": "8",
+      "is_local": true
+    },
+    {
+      "name": "LAST_OFFSET",
+      "type": "int",
+      "default": "8",
+      "is_local": true
+    },
+    {
+      "name": "ID_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "DEST_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "USER_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "WIDTH",
+      "type": "int",
+      "default": "10",
+      "is_local": true
+    }
+  ],
+  "ports": [
+    {
+      "name": "clk",
+      "direction": "input",
+      "width": 1,
+      "is_clock": true,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "rst",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": true,
+      "reset_polarity": "high"
+    },
+    {
+      "name": "s_axis_tdata",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tkeep",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tvalid",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tready",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tlast",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tid",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tdest",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tuser",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tdata",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tkeep",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tvalid",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tready",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tlast",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tid",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tdest",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tuser",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "pause_req",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "pause_ack",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "status_depth",
+      "direction": "output",
+      "width": 9,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "status_depth_commit",
+      "direction": "output",
+      "width": 9,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "status_overflow",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "status_bad_frame",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "status_good_frame",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    }
+  ],
+  "always_blocks": [
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 261,
+      "end_line": 364,
+      "signals_written": [
+        "bad_frame_reg",
+        "drop_frame_reg",
+        "good_frame_reg",
+        "mark_frame_reg",
+        "mem",
+        "overflow_reg",
+        "s_frame_reg",
+        "send_frame_reg",
+        "wr_ptr_commit_reg",
+        "wr_ptr_reg"
+      ],
+      "signals_read": [
+        "ADDR_WIDTH",
+        "DROP_BAD_FRAME",
+        "DROP_OVERSIZE_FRAME",
+        "DROP_WHEN_FULL",
+        "FRAME_FIFO",
+        "LAST_ENABLE",
+        "MARK_WHEN_FULL",
+        "USER_BAD_FRAME_MASK",
+        "USER_BAD_FRAME_VALUE",
+        "clk",
+        "full",
+        "full_wr",
+        "rst",
+        "s_axis",
+        "s_axis_tlast",
+        "s_axis_tready",
+        "s_axis_tuser",
+        "s_axis_tvalid"
+      ]
+    },
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 367,
+      "end_line": 370,
+      "signals_written": [
+        "depth_commit_reg",
+        "depth_reg"
+      ],
+      "signals_read": [
+        "clk",
+        "rd_ptr_reg",
+        "wr_ptr_commit_reg",
+        "wr_ptr_reg"
+      ]
+    },
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 375,
+      "end_line": 405,
+      "signals_written": [
+        "j",
+        "m_axis_pipe_reg",
+        "m_axis_tvalid_pipe_reg",
+        "rd_ptr_reg"
+      ],
+      "signals_read": [
+        "ADDR_WIDTH",
+        "RAM_PIPELINE",
+        "clk",
+        "empty",
+        "m_axis_tready_pipe",
+        "mem",
+        "pipe_ready",
+        "rst"
+      ]
+    }
+  ],
+  "submodules": [],
+  "imports": [],
+  "module_type": "sequential",
+  "parse_status": "ok",
+  "confidence": 1.0
+}

@@ -443,8 +443,12 @@ def _find_sby_binary() -> str | None:
     return None
 
 
-def _make_formal_backend(cfg, sby_bin: str):
-    """Construct the configured FormalBackend (sby or synlig)."""
+def _make_formal_backend(cfg, sby_bin: str, flatten: bool = False):
+    """Construct the configured FormalBackend (sby or synlig).
+
+    ``flatten`` enables flatten-then-prove — used for compositions so a wrapper's
+    carried component assertions + cross-boundary properties close by k-induction.
+    """
     if cfg.formal_backend == "synlig":
         from specloop.formal.synlig_backend import SynligBackend
         return SynligBackend(
@@ -462,6 +466,7 @@ def _make_formal_backend(cfg, sby_bin: str):
         depth=cfg.formal_depth,
         solver=cfg.formal_solver,
         debug=cfg.formal_debug,
+        flatten=flatten,
     )
 
 
@@ -949,7 +954,9 @@ def compose(
     if not no_verify:
         sby_bin = _find_sby_binary()
         if sby_bin:
-            formal = _make_formal_backend(cfg, sby_bin)
+            # Compositions prove flattened (flatten-then-prove) so carried
+            # component assertions + cross-boundary properties close by induction.
+            formal = _make_formal_backend(cfg, sby_bin, flatten=True)
         else:
             console.print(
                 "[yellow]sby not found — skipping formal verification.[/yellow]\n"
@@ -1059,6 +1066,25 @@ def compose(
         _print_formal_result(result.formal_result, result.composition_name, title="Composition Proof")
     else:
         console.print("[dim](Formal verification skipped)[/dim]")
+
+    # ── Carried-proof spine: honest carried-vs-interaction breakdown ─────────
+    if result.deterministic and result.formal_result and result.bind_result:
+        idx = result.bind_result.assertion_index
+        carried = [e for e in idx if e.category == "inherited"]
+        interaction = [e for e in idx if e.category == "interaction"]
+        console.print(
+            f"\n[bold]Carried-proof spine[/bold] (attached via `bind`):\n"
+            f"  Inherited component assertions: {len(carried)}\n"
+            f"  Cross-boundary interaction assertions: {len(interaction)}"
+        )
+        # HONESTY: `bind` is silently ignored by the open-source sby front-end, so a
+        # PASS over these is vacuous. Never present it as a sound verification here.
+        console.print(
+            "  [yellow]NOT VERIFIED: these are attached via SystemVerilog `bind`, which "
+            "the open-source backend ignores — the proof is vacuous. For a sound "
+            "end-to-end result use the round-trip harness "
+            "(compose.axis_pipeline.emit_roundtrip_harness).[/yellow]"
+        )
 
     # ── Summary ─────────────────────────────────────────────────────────────
     if result.skipped_sub_functions:

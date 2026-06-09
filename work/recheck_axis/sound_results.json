@@ -1,0 +1,338 @@
+{
+  "axis_register": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 25,
+    "exercised_proven": 11,
+    "guard_dormant": 13,
+    "non_inductive_holds": 0,
+    "genuine_hold": 24,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_skid_buffer_backpressure_condition"
+    ],
+    "sound_confidence": 0.96
+  },
+  "axis_pipeline_register": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 16,
+    "exercised_proven": 10,
+    "guard_dormant": 6,
+    "non_inductive_holds": 0,
+    "genuine_hold": 16,
+    "needs_control_env": [],
+    "discarded_wrong": [],
+    "sound_confidence": 1.0
+  },
+  "axis_srl_register": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 13,
+    "exercised_proven": 13,
+    "guard_dormant": 0,
+    "non_inductive_holds": 0,
+    "genuine_hold": 13,
+    "needs_control_env": [],
+    "discarded_wrong": [],
+    "sound_confidence": 1.0
+  },
+  "axis_fifo": {
+    "status": "soundly_reproven",
+    "config": "DEPTH=256",
+    "total": 25,
+    "exercised_proven": 15,
+    "guard_dormant": 8,
+    "non_inductive_holds": 1,
+    "genuine_hold": 24,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_rd_ptr_never_exceeds_commit"
+    ],
+    "sound_confidence": 0.96
+  },
+  "axis_srl_fifo": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 19,
+    "exercised_proven": 5,
+    "guard_dormant": 1,
+    "non_inductive_holds": 8,
+    "genuine_hold": 14,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_master_valid_when_not_empty",
+      "ap_no_ready_when_full",
+      "ap_no_valid_when_empty",
+      "ap_no_write_when_full",
+      "ap_no_read_when_empty"
+    ],
+    "sound_confidence": 0.737
+  },
+  "axis_adapter": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 11,
+    "exercised_proven": 10,
+    "guard_dormant": 0,
+    "non_inductive_holds": 0,
+    "genuine_hold": 10,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_reset_slave_ready"
+    ],
+    "sound_confidence": 0.909
+  },
+  "axis_frame_length_adjust": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 19,
+    "exercised_proven": 14,
+    "guard_dormant": 0,
+    "non_inductive_holds": 0,
+    "genuine_hold": 14,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_passthrough_length",
+      "ap_short_counter_bound",
+      "ap_long_counter_bound",
+      "ap_truncate_no_output",
+      "ap_output_pipeline_temp"
+    ],
+    "sound_confidence": 0.737
+  },
+  "axis_frame_join": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 19,
+    "exercised_proven": 17,
+    "guard_dormant": 0,
+    "non_inductive_holds": 1,
+    "genuine_hold": 18,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_tlast_only_on_final_port"
+    ],
+    "sound_confidence": 0.947
+  },
+  "axis_cobs_encode": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 20,
+    "exercised_proven": 17,
+    "guard_dormant": 0,
+    "non_inductive_holds": 0,
+    "genuine_hold": 17,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_input_count_resets_on_boundary",
+      "ap_output_count_decrements",
+      "ap_output_alternates_code_data"
+    ],
+    "sound_confidence": 0.85
+  },
+  "axis_cobs_decode": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 26,
+    "exercised_proven": 22,
+    "guard_dormant": 0,
+    "non_inductive_holds": 1,
+    "genuine_hold": 23,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_reset_s_ready",
+      "ap_no_simultaneous_temp_valids",
+      "ap_tlast_implies_idle"
+    ],
+    "sound_confidence": 0.885
+  },
+  "axis_rate_limit": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 35,
+    "exercised_proven": 23,
+    "guard_dormant": 0,
+    "non_inductive_holds": 6,
+    "genuine_hold": 29,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_master_valid_stable",
+      "ap_accumulator_bounded",
+      "ap_no_ready_when_paused",
+      "ap_skid_buffer_no_overflow",
+      "ap_rate_by_frame_pause_in_frame",
+      "ap_ready_implies_not_paused"
+    ],
+    "sound_confidence": 0.829
+  },
+  "axis_mux": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 15,
+    "exercised_proven": 12,
+    "guard_dormant": 0,
+    "non_inductive_holds": 0,
+    "genuine_hold": 12,
+    "needs_control_env": [],
+    "discarded_wrong": [
+      "ap_frame_start",
+      "ap_no_ready_disabled",
+      "ap_valid_needs_frame"
+    ],
+    "sound_confidence": 0.8
+  },
+  "axis_demux": {
+    "status": "soundly_reproven",
+    "config": "default",
+    "total": 24,
+    "exercised_proven": 16,
+    "guard_dormant": 0,
+    "non_inductive_holds": 1,
+    "genuine_hold": 17,
+    "needs_control_env": [
+      "ap_select_stable_after_start",
+      "ap_select_stable_during_frame",
+      "ap_drop_stable_after_start",
+      "ap_drop_stable_during_frame"
+    ],
+    "discarded_wrong": [
+      "ap_output_temp_mutex",
+      "ap_tlast_propagates",
+      "ap_ready_reflects_master"
+    ],
+    "sound_confidence": 0.708
+  },
+  "axis_async_fifo": {
+    "status": "flagged",
+    "reason": "flagged_dual_clock \u2014 two clock domains (s_axis_aclk/m_axis_aclk); single-clock gated harness does not apply (gates ERROR). Needs a CDC environment."
+  },
+  "axis_ll_bridge": {
+    "status": "flagged",
+    "reason": "flagged_malformed_spec \u2014 assertion ap_axis_ready_inverse uses $past in a non-clocked block (illegal); spec cannot elaborate."
+  },
+  "ibex_prefetch_buffer": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "ibex_register_file_fpga": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "top_compose": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "ibex_counter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_axi_adapter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "arbiter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "axis_tap": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_regs": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "axis_frame_len": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_filter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_blanker": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_ascon_round": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_cdc_rand_delay": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_pcpi_mul": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "axis_stat_counter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "priority_encoder": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "sync_reset": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_wb": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_ascon_sbox": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_pcpi_fast_mul": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_diff_decode": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "ibex_register_file_ff": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "ibex_csr": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_crc32": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "counter": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_pcpi_div": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "fifo_sync": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "picorv32_axi": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "prim_filter_ctr": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  },
+  "fsm_traffic": {
+    "status": "flagged_not_reproven",
+    "reason": "non-AXIS / no s_axis slave \u2014 needs its own protocol environment (wishbone/AXI4/req-grant/monitor/etc.)"
+  }
+}

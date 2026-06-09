@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -15,7 +16,19 @@ from specloop.gen.client import LLMClient
 from specloop.ir.schema import ModuleIR, Port
 from specloop.search.searcher import search
 from specloop.compose.assertions import CompositionAssertionGenerator
-from specloop.compose.compatibility import CompatibilityChecker
+from specloop.compose.axis_pipeline import (
+    build_carried_bind,
+    emit_pipeline_wrapper,
+    order_axis_pipeline,
+)
+from specloop.compose.compatibility import (
+    CompatibilityChecker,
+    _is_axis_port,
+    axis_connection_roles,
+    candidate_role_issues,
+    pair_axis_interfaces,
+)
+from specloop.gen.schema import BindResult
 from specloop.compose.schema import (
     CompositionPlan,
     CompositionResult,
@@ -32,19 +45,60 @@ class CompositionError(Exception):
     pass
 
 
-def _infer_search_filters(query: str) -> dict:
-    """Infer Qdrant payload *hard* filters from a search query.
+# Penalty applied per interface warning (e.g. ENABLE-flag or clock-domain
+# mismatch) when ranking otherwise error-free candidates. Large enough to beat a
+# small semantic-score lead, so a clean-clock single-stream block is preferred
+# over a same-family but clock-crossing one (axis_fifo over axis_async_fifo).
+_INTERFACE_WARNING_PENALTY = 0.1
 
-    Returns no filters by design. The interface properties we could detect here
-    (has_axi, has_valid_ready, sequential) are shared by nearly every bus module,
-    so as hard pre-filters they don't narrow toward what a module *does* — and they
-    actively exclude valid cross-protocol matches (e.g. a generic request/grant
-    arbiter, which has no AXI ports, gets dropped from an "AXI-Stream arbiter"
-    query). Behavioral discrimination now lives in the ranking blend inside
-    ``search()`` (protocol-vocabulary stripping), which orders the full library
-    without excluding anything, so these brittle pre-filters are net-negative.
+# Identifier that begins a module instantiation: `<modname> #(` or `<modname> inst (`.
+_INST_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s+(?:#\s*\(|[A-Za-z_]\w*\s*\()", re.MULTILINE)
+_INST_SKIP = frozenset({
+    "if", "for", "case", "module", "assign", "always", "begin", "initial",
+    "generate", "wire", "reg", "logic", "input", "output", "inout", "localparam",
+    "parameter", "genvar", "integer", "function", "task", "posedge", "negedge",
+})
+
+
+def _resolve_rtl_deps(rtl_paths: list[Path]) -> list[Path]:
+    """Return the given RTL files plus their transitive submodule files, found by
+    scanning each source for instantiations of a module that exists as a sibling
+    ``<name>.v``. The IR does not carry submodule lists, so this source-level
+    closure is what lets a composition's sub-modules (e.g. axis_pipeline_register's
+    internal axis_register) reach the prover instead of being stubbed out."""
+    seen: dict[Path, None] = {}
+    queue = list(rtl_paths)
+    while queue:
+        rp = queue.pop(0).resolve()
+        if rp in seen:
+            continue
+        seen[rp] = None
+        try:
+            text = rp.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in _INST_RE.finditer(text):
+            name = m.group(1)
+            if name in _INST_SKIP:
+                continue
+            cand = rp.parent / f"{name}.v"
+            if cand.exists() and cand.resolve() not in seen:
+                queue.append(cand)
+    return [Path(p) for p in seen]
+
+
+def _protocol_prefilter(plan: CompositionPlan, sf_id: str) -> dict:
+    """Coarse Qdrant pre-filter derived from a sub-function's *own* connections.
+
+    When a role is wired with AXI-Stream ports it must be filled by an AXI-Stream
+    block, so we pre-filter to ``has_axi`` candidates — this keeps a bare-memory
+    FIFO (``fifo_sync``: wr_en/rd_en/full/empty) out of an AXI-Stream buffer role
+    and stops it starving the real ``axis_fifo`` out of the top-k. The filter is
+    conditional on *this* role's connections, never blanket: a req/grant arbiter
+    role yields no AXI requirement, so a valid arbiter with no AXI ports of its
+    own is never excluded.
     """
-    return {}
+    return {"has_axi": True} if axis_connection_roles(plan, sf_id) else {}
 
 
 class CompositionPipeline:
@@ -57,6 +111,7 @@ class CompositionPipeline:
         top_k: int = 3,
         min_confidence: float = 0.5,
         min_score: float = 0.70,
+        param_overrides: Optional[dict[str, dict[str, str]]] = None,
     ) -> None:
         self._client = client
         self._qdrant_url = qdrant_url
@@ -65,6 +120,10 @@ class CompositionPipeline:
         self._top_k = top_k
         self._min_confidence = min_confidence
         self._min_score = min_score
+        # {module_name: {param: value}} overrides applied to the deterministic
+        # pipeline wrapper (e.g. cap a FIFO DEPTH for fast proofs). General — the
+        # caller supplies them; nothing here is keyed to a specific module.
+        self._param_overrides = param_overrides or {}
 
     def run(
         self,
@@ -91,24 +150,59 @@ class CompositionPipeline:
                 + "\n".join(f"  [error] {i.message}" for i in compat.errors)
             )
 
-        # Step 4: Wrapper generation
-        log.info("Step 4: generating SystemVerilog wrapper")
-        wrapper_sv = WrapperGenerator(self._client).generate(request, plan, selected, compat)
-
+        # Steps 4-5: wrapper + composition bind. A clean linear AXI-Stream pipeline
+        # is wired and proven deterministically — the wrapper is emitted from the
+        # bundle structure (no LLM glue), and the bind carries each component's own
+        # proven assertions onto its instance plus cross-boundary interaction
+        # assertions. Anything else falls back to the LLM wrapper/assertion path.
         out_dir.mkdir(parents=True, exist_ok=True)
         wrapper_path = out_dir / f"{plan.composition_name}.sv"
-        wrapper_path.write_text(wrapper_sv, encoding="utf-8")
-        log.info("Wrapper written to %s", wrapper_path)
-
-        # Step 5: Composition assertions (inheriting each component's proven
-        # properties from its bind module in work_dir; interaction layer is new).
-        log.info("Step 5: generating composition assertions")
-        bind_result = CompositionAssertionGenerator(self._client).generate(
-            request, plan, selected, wrapper_sv, work_dir=work_dir
-        )
         bind_path = out_dir / f"{plan.composition_name}.bind.sv"
+
+        ordered = order_axis_pipeline(plan, selected)
+        wrapper_sv = (
+            emit_pipeline_wrapper(plan.composition_name, ordered, self._param_overrides)
+            if ordered is not None else None
+        )
+        deterministic = wrapper_sv is not None
+        carried = None
+
+        if deterministic:
+            log.info("Step 4: deterministic AXI-Stream pipeline wrapper (%d stages, no LLM)", len(ordered))
+            wrapper_path.write_text(wrapper_sv, encoding="utf-8")
+            log.info("Step 5: carried-proof bind (component proofs + interaction assertions)")
+            carried = build_carried_bind(plan.composition_name, ordered, work_dir)
+            bind_result = BindResult(
+                bind_module_sv=carried.bind_sv,
+                assertion_index=carried.assertion_index,
+                model_id="deterministic",
+            )
+            log.info(
+                "Carried %d proven assertions from %d component(s); %d cross-boundary "
+                "interaction assertions", carried.n_carried, len(carried.carried_modules),
+                carried.n_interaction,
+            )
+            # HONESTY: the open-source Yosys front-end (sby backend) silently ignores
+            # SystemVerilog `bind`, so these bind-attached assertions are NOT actually
+            # checked there — a PASS is vacuous. Only a bind-aware front-end (synlig)
+            # or a closed harness (see compose.axis_pipeline.emit_roundtrip_harness)
+            # verifies them. Do not report this proof as sound under the sby backend.
+            log.warning(
+                "Carried/interaction assertions are attached via `bind`; under the "
+                "open-source sby backend `bind` is ignored, so this composition proof "
+                "is VACUOUS. Use a bind-aware backend or the round-trip harness for a "
+                "sound end-to-end result."
+            )
+        else:
+            log.info("Step 4: generating SystemVerilog wrapper (LLM)")
+            wrapper_sv = WrapperGenerator(self._client).generate(request, plan, selected, compat)
+            wrapper_path.write_text(wrapper_sv, encoding="utf-8")
+            log.info("Step 5: generating composition assertions (LLM)")
+            bind_result = CompositionAssertionGenerator(self._client).generate(
+                request, plan, selected, wrapper_sv, work_dir=work_dir
+            )
         bind_path.write_text(bind_result.bind_module_sv, encoding="utf-8")
-        log.info("Bind module written to %s", bind_path)
+        log.info("Wrapper -> %s ; bind -> %s", wrapper_path, bind_path)
 
         # Step 6: SBY formal verification (optional)
         formal_result = None
@@ -116,7 +210,7 @@ class CompositionPipeline:
 
         if formal is not None:
             log.info("Step 6: running SBY on composition (mode=%s)", formal_mode)
-            deps = [s.rtl_path for s in selected if s.rtl_path.exists()]
+            deps = _resolve_rtl_deps([s.rtl_path for s in selected if s.rtl_path.exists()])
             formal_result = formal.run(
                 module_name=plan.composition_name,
                 rtl_path=wrapper_path,
@@ -128,8 +222,10 @@ class CompositionPipeline:
             )
             confidence = formal_result.confidence
 
-            # Repair loop if needed
-            if formal_result.status != "pass" and formal_repair_iterations > 0:
+            # Repair loop if needed. Skipped for the deterministic path: its bind
+            # carries proven component assertions verbatim, so LLM repair would only
+            # discard real proofs rather than fix anything.
+            if formal_result.status != "pass" and formal_repair_iterations > 0 and not deterministic:
                 from specloop.loop.repair import RepairLoop
 
                 wrapper_ir = _build_wrapper_ir(plan, selected, wrapper_path)
@@ -161,6 +257,9 @@ class CompositionPipeline:
             bind_result=bind_result,
             formal_result=formal_result,
             confidence=confidence,
+            deterministic=deterministic,
+            n_interaction_assertions=carried.n_interaction if carried else 0,
+            n_carried_assertions=carried.n_carried if carried else 0,
         )
 
     # ------------------------------------------------------------------
@@ -173,36 +272,37 @@ class CompositionPipeline:
     ) -> tuple[list[SelectedModule], list[str]]:
         """Return (selected, skipped_warnings).
 
-        Skips sub-functions whose best search score falls below self._min_score
-        rather than using a semantically wrong module.
+        Selection is interface-aware: each role is pre-filtered to the protocol
+        family its connections require, then candidates are ranked so only blocks
+        whose AXI-Stream interface is compatible with the role and its already-
+        selected upstream neighbour are chosen — keeping a bare-memory FIFO out of
+        an AXI-Stream buffer slot. Sub-functions whose best search score falls
+        below self._min_score are skipped rather than filled with a wrong module.
         """
         selected: list[SelectedModule] = []
         skipped: list[str] = []
+        selected_by_id: dict[str, ModuleIR] = {}       # sub_function_id -> chosen IR
+        ir_cache: dict[str, Optional[ModuleIR]] = {}    # module_name -> real IR (or None)
 
         for sf in plan.sub_functions:
-            # Infer structural filters from the sub-function's search query.
-            search_filters = _infer_search_filters(sf.search_query)
+            required_roles = axis_connection_roles(plan, sf.id)
+
+            # Coarse, role-conditional protocol pre-filter (never a blanket has_axi).
+            prefilter = _protocol_prefilter(plan, sf.id)
             results = search(
-                sf.search_query,
-                self._qdrant_url,
-                self._collection,
-                self._embed_model,
-                top_k=self._top_k,
-                **search_filters,
+                sf.search_query, self._qdrant_url, self._collection,
+                self._embed_model, top_k=self._top_k, **prefilter,
             )
 
-            # If the filtered search starves this sub-function, fall back to unfiltered.
-            if len(results) < 2 and search_filters:
+            # Starvation fallback: a thin index must never block composition.
+            if len(results) < 2 and prefilter:
                 log.info(
-                    "Filtered search returned %d results for '%s' — falling back to unfiltered",
+                    "Protocol-filtered search returned %d results for '%s' — falling back to unfiltered",
                     len(results), sf.search_query,
                 )
                 results = search(
-                    sf.search_query,
-                    self._qdrant_url,
-                    self._collection,
-                    self._embed_model,
-                    top_k=self._top_k,
+                    sf.search_query, self._qdrant_url, self._collection,
+                    self._embed_model, top_k=self._top_k,
                 )
 
             if not results:
@@ -235,49 +335,21 @@ class CompositionPipeline:
                     f"Try --min-confidence {best.confidence:.1f} or index a better-verified module."
                 )
 
-            if ppa_target is None or len(eligible) <= 1:
-                # No PPA target or only one choice — use existing selection.
-                best = max(eligible, key=lambda r: r.score * r.confidence)
-                ppa_used = False
-            else:
-                # PPA-aware selection: among eligible candidates, pick the one
-                # whose PPA vector is closest to the target (blended 60/40 with
-                # semantic score). Old modules without PPA payload default to
-                # 0.5, so this degrades gracefully toward the semantic ranking.
-                target_vec = PPAVector(
-                    latency=ppa_target.latency,
-                    throughput=ppa_target.throughput,
-                    area=ppa_target.area,
-                    power=ppa_target.power,
-                )
-
-                def ppa_score(r):
-                    candidate_vec = PPAVector(
-                        latency=r.ppa_latency,
-                        throughput=r.ppa_throughput,
-                        area=r.ppa_area,
-                        power=r.ppa_power,
-                    )
-                    ppa_dist = distance(candidate_vec, target_vec)
-                    # Weight: 60% semantic, 40% PPA proximity (distance inverted).
-                    return 0.6 * r.score * r.confidence + 0.4 * (1.0 - ppa_dist)
-
-                best = max(eligible, key=ppa_score)
-                ppa_used = True
-
-            log.info(
-                "Selected '%s' for sub-function '%s' (score=%.4f, confidence=%.2f, ppa_aware=%s)",
-                best.module_name, sf.id, best.score, best.confidence, ppa_used,
+            best, ir, ppa_used, iface_note = self._select_interface_aware(
+                eligible, required_roles, sf.id, plan, selected_by_id, work_dir,
+                ir_cache, ppa_target,
             )
 
-            # Load ModuleIR from work dir
-            ir_path = work_dir / f"{best.module_name}.ir.json"
-            if ir_path.exists():
-                ir = ModuleIR.model_validate(json.loads(ir_path.read_text()))
-            else:
+            log.info(
+                "Selected '%s' for sub-function '%s' (score=%.4f, confidence=%.2f, "
+                "ppa_aware=%s, interface=%s)",
+                best.module_name, sf.id, best.score, best.confidence, ppa_used, iface_note,
+            )
+
+            if ir is None:
                 log.warning(
-                    "IR not found for '%s' at %s — using minimal fallback",
-                    best.module_name, ir_path,
+                    "IR not found for '%s' in %s — using minimal fallback",
+                    best.module_name, work_dir,
                 )
                 ir = ModuleIR(
                     module=best.module_name,
@@ -299,6 +371,7 @@ class CompositionPipeline:
                 ir=ir,
                 rtl_path=rtl_path,
             ))
+            selected_by_id[sf.id] = ir
 
         if not selected:
             raise CompositionError(
@@ -308,6 +381,106 @@ class CompositionPipeline:
             )
 
         return selected, skipped
+
+    def _select_interface_aware(
+        self,
+        eligible: list,
+        required_roles: set,
+        sf_id: str,
+        plan: CompositionPlan,
+        selected_by_id: dict,
+        work_dir: Path,
+        ir_cache: dict,
+        ppa_target: Optional[PPATarget],
+    ):
+        """Pick the best eligible candidate whose interface fits the role.
+
+        Each candidate is scored for interface errors (missing the AXI-Stream
+        bundle its role needs, or a width/direction conflict with the upstream
+        module already selected) and warnings (ENABLE-flag / clock-domain
+        mismatch). Candidates with errors are dropped whenever a clean one exists;
+        among the rest the existing semantic (or PPA-blended) score decides, minus
+        a per-warning penalty so a clean single-clock block wins over a same-family
+        clock-crossing one. Candidates with no IR on disk are left unchecked rather
+        than penalised. Returns (best, best_ir_or_None, ppa_used, note).
+        """
+        errors: dict[str, int] = {}
+        warnings: dict[str, int] = {}
+        irs: dict[str, Optional[ModuleIR]] = {}
+        for r in eligible:
+            ir = self._load_real_ir(r.module_name, work_dir, ir_cache)
+            irs[r.module_name] = ir
+            if ir is None:
+                errors[r.module_name] = warnings[r.module_name] = 0
+                continue
+            issues = candidate_role_issues(ir, required_roles)
+            for conn in plan.connections:
+                if (conn.to_id == sf_id and conn.from_id in selected_by_id
+                        and _is_axis_port(conn.to_port)):
+                    issues += pair_axis_interfaces(
+                        conn.from_id, selected_by_id[conn.from_id], sf_id, ir,
+                    )
+            errors[r.module_name] = sum(1 for i in issues if i.severity == "error")
+            warnings[r.module_name] = sum(1 for i in issues if i.severity == "warning")
+
+        compatible = [r for r in eligible if errors[r.module_name] == 0]
+        pool = compatible or eligible
+        excluded = [r.module_name for r in eligible if errors[r.module_name] > 0]
+
+        base_metric, ppa_used = self._base_metric(pool, ppa_target)
+        best = max(
+            pool,
+            key=lambda r: base_metric(r) - _INTERFACE_WARNING_PENALTY * warnings[r.module_name],
+        )
+
+        note = "ok" if warnings[best.module_name] == 0 else f"warnings={warnings[best.module_name]}"
+        if excluded:
+            note += f"; excluded interface-incompatible={excluded}"
+        return best, irs[best.module_name], ppa_used, note
+
+    def _base_metric(self, pool: list, ppa_target: Optional[PPATarget]):
+        """Return (metric_fn, ppa_used) — the semantic ranker, optionally PPA-blended.
+
+        With a PPA target and more than one candidate, blends 60% semantic score
+        with 40% PPA proximity to the target; otherwise pure score×confidence.
+        Modules without PPA payload default to 0.5, degrading gracefully.
+        """
+        if ppa_target is None or len(pool) <= 1:
+            return (lambda r: r.score * r.confidence), False
+
+        target_vec = PPAVector(
+            latency=ppa_target.latency, throughput=ppa_target.throughput,
+            area=ppa_target.area, power=ppa_target.power,
+        )
+
+        def metric(r):
+            candidate_vec = PPAVector(
+                latency=r.ppa_latency, throughput=r.ppa_throughput,
+                area=r.ppa_area, power=r.ppa_power,
+            )
+            return 0.6 * r.score * r.confidence + 0.4 * (1.0 - distance(candidate_vec, target_vec))
+
+        return metric, True
+
+    @staticmethod
+    def _load_real_ir(
+        module_name: str, work_dir: Path, cache: dict,
+    ) -> Optional[ModuleIR]:
+        """Load a candidate's ModuleIR from work_dir, cached. None when absent or
+        unparseable — the interface check then skips that candidate rather than
+        treating missing data as incompatibility."""
+        if module_name in cache:
+            return cache[module_name]
+        ir_path = work_dir / f"{module_name}.ir.json"
+        ir: Optional[ModuleIR] = None
+        if ir_path.exists():
+            try:
+                ir = ModuleIR.model_validate(json.loads(ir_path.read_text()))
+            except Exception as exc:  # noqa: BLE001 - defensive; bad IR must not break selection
+                log.warning("Failed to parse IR for '%s' (%s) — skipping interface check",
+                            module_name, exc)
+        cache[module_name] = ir
+        return ir
 
 
 # ---------------------------------------------------------------------------

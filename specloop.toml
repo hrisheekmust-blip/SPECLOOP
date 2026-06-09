@@ -1,3 +1,5 @@
 llm_backend = "anthropic"
 llm_model = "claude-sonnet-4-5"
-rtl_include_dirs = ["/home/hrisheek/projects/specloop2/opentitan/hw/ip/prim/rtl", "/home/hrisheek/projects/specloop2/ibex/rtl"]
+# Cross-file RTL include dirs (packages/macros) — set per target codebase,
+# e.g. ["ibex/rtl", "opentitan/hw/ip/prim/rtl"] when speccing those trees.
+rtl_include_dirs = []

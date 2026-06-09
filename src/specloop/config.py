@@ -50,7 +50,7 @@ class SpecloopConfig(BaseSettings):
     formal_solver: str = Field(default="")        # "" = SBY default; "bitwuzla", "yices", etc.
     formal_repair_iterations: int = Field(default=3)
     formal_debug: bool = Field(default=False)    # print raw SBY stdout/stderr
-    synlig_path: str = Field(default="~/projects/specloop2/synlig/bin/synlig")
+    synlig_path: str = Field(default="synlig/bin/synlig")
 
     # Semantic search
     qdrant_url: str = Field(default="http://localhost:6333")

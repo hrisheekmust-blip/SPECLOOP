@@ -75,3 +75,8 @@ class CompositionResult(BaseModel):
     bind_result: Optional[BindResult] = None
     formal_result: Optional[FormalResult] = None
     confidence: float = 0.0
+    # Carried-proof spine: True when the wrapper was emitted deterministically and
+    # the bind carries component proofs + cross-boundary interaction assertions.
+    deterministic: bool = False
+    n_interaction_assertions: int = 0   # real cross-boundary assertions generated
+    n_carried_assertions: int = 0       # proven component assertions carried in

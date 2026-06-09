@@ -14,3 +14,9 @@ ibex_spec_run.log
 work/compose/
 synlig.tar.gz
 synlig/synlig.tar.gz
+synlig/
+slpp_all/
+snapshots/
+opentitan/
+ibex/
+*.cast

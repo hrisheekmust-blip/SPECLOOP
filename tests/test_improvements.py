@@ -282,6 +282,333 @@ def test_synth_ppa():
 
 
 # --------------------------------------------------------------------------
+# Improvement 5 — interface-aware selection (bundle-aware compatibility)
+# --------------------------------------------------------------------------
+
+def _axis_module(name: str, width: int = 8, clk: str | None = "clk",
+                 rst: str | None = "rst", keep: bool = True, user: bool = True) -> ModuleIR:
+    """A single-stream AXI-Stream module: one s_axis slave + one m_axis master."""
+    ports: list[Port] = []
+    if clk is not None:
+        ports.append(Port(name=clk, direction="input", is_clock=True))
+    if rst is not None:
+        ports.append(Port(name=rst, direction="input", is_reset=True, reset_polarity="high"))
+
+    def bundle(prefix: str, slave: bool) -> list[Port]:
+        fwd = "input" if slave else "output"   # data/valid/last flow toward a slave
+        rev = "output" if slave else "input"   # ready flows back to the master
+        b = [Port(name=f"{prefix}_tdata", direction=fwd, width=width),
+             Port(name=f"{prefix}_tvalid", direction=fwd),
+             Port(name=f"{prefix}_tready", direction=rev),
+             Port(name=f"{prefix}_tlast", direction=fwd)]
+        if keep:
+            b.append(Port(name=f"{prefix}_tkeep", direction=fwd, width=max(1, width // 8)))
+        if user:
+            b.append(Port(name=f"{prefix}_tuser", direction=fwd))
+        return b
+
+    ports += bundle("s_axis", slave=True) + bundle("m_axis", slave=False)
+    return ModuleIR(module=name, file=f"{name}.v", ports=ports)
+
+
+def _mem_fifo(name: str = "fifo_sync") -> ModuleIR:
+    """A bare-memory FIFO — the wrong-interface block the discovery run wired in."""
+    return ModuleIR(module=name, file=f"{name}.v", ports=[
+        Port(name="clk", direction="input", is_clock=True),
+        Port(name="rst_n", direction="input", is_reset=True, reset_polarity="low"),
+        Port(name="wr_en", direction="input"), Port(name="wr_data", direction="input", width=8),
+        Port(name="rd_en", direction="input"), Port(name="rd_data", direction="output", width=8),
+        Port(name="full", direction="output"), Port(name="empty", direction="output"),
+    ])
+
+
+def test_axis_bundle_extraction_and_roles():
+    from specloop.compose.compatibility import axis_bundles, bundles_by_role
+
+    ir = _axis_module("axis_fifo")
+    bundles = axis_bundles(ir)
+    assert set(bundles) == {"s_axis", "m_axis"}, f"bundles: {set(bundles)}"
+    assert {"tdata", "tvalid", "tready", "tlast"} <= set(bundles["s_axis"])
+    assert len(bundles_by_role(ir, "slave")) == 1 and len(bundles_by_role(ir, "master")) == 1
+    # a bare-memory FIFO exposes no axis bundles at all
+    assert axis_bundles(_mem_fifo()) == {}
+    print("  OK bundles: s_axis(slave)/m_axis(master) grouped by tvalid direction; mem-FIFO has none")
+
+
+def test_pair_axis_chain_and_reject_memfifo():
+    from specloop.compose.compatibility import pair_axis_interfaces, candidate_role_issues
+
+    up, down = _axis_module("axis_register"), _axis_module("axis_fifo")
+    assert not [i for i in pair_axis_interfaces("reg", up, "buf", down) if i.severity == "error"]
+    # the discovery bug: a bare-memory FIFO in the buffer slot -> error (no s_axis slave bundle)
+    bad = pair_axis_interfaces("reg", up, "buf", _mem_fifo())
+    assert any(i.severity == "error" for i in bad), "mem-FIFO wrongly accepted as AXIS slave"
+    assert candidate_role_issues(_mem_fifo(), {"slave", "master"}), "mem-FIFO should fail role check"
+    assert not candidate_role_issues(_axis_module("x"), {"slave", "master"})
+    print("  OK pairing: axis->axis clean; bare-memory FIFO rejected from the AXIS buffer slot")
+
+
+def test_connection_roles_not_over_excluded():
+    from specloop.compose.compatibility import axis_connection_roles
+
+    plan = _plan("reg", "buf", "sink", conns=[
+        Connection(from_id="reg", from_port="m_axis_tdata", to_id="buf", to_port="s_axis_tdata"),
+        Connection(from_id="buf", from_port="m_axis_tdata", to_id="sink", to_port="s_axis_tdata"),
+    ])
+    assert axis_connection_roles(plan, "buf") == {"slave", "master"}
+    assert axis_connection_roles(plan, "reg") == {"master"}
+    # a req/grant arbiter role must NOT be forced to carry AXIS bundles (the arbiter bug)
+    aplan = _plan("arb", "client", conns=[
+        Connection(from_id="client", from_port="request", to_id="arb", to_port="request"),
+        Connection(from_id="arb", from_port="grant", to_id="client", to_port="grant"),
+    ])
+    assert axis_connection_roles(aplan, "arb") == set(), "non-AXIS role wrongly required AXIS bundles"
+    print("  OK roles: AXIS roles derive slave/master; req/grant arbiter demands no AXIS ports")
+
+
+def test_pair_width_clock_enable_diagnostics():
+    from specloop.compose.compatibility import pair_axis_interfaces
+
+    up = _axis_module("up", width=8)
+    # width mismatch -> error
+    assert any(i.severity == "error" and "width" in i.message.lower()
+               for i in pair_axis_interfaces("up", up, "wide", _axis_module("wide", width=16)))
+    # async-like neighbour with no shared clock -> warning, never an error
+    iss = pair_axis_interfaces("up", up, "async", _axis_module("async", clk=None))
+    assert not [i for i in iss if i.severity == "error"], "clock-domain diff must not be an error"
+    assert any(i.severity == "warning" and "clock" in i.message.lower() for i in iss)
+    # ENABLE mismatch: neighbour drops tkeep -> warning, not error
+    iss2 = pair_axis_interfaces("up", up, "nokeep", _axis_module("nokeep", keep=False))
+    assert any(i.severity == "warning" and "tkeep" in i.message for i in iss2)
+    assert not [i for i in iss2 if i.severity == "error"], "optional-signal diff must not be an error"
+    print("  OK diagnostics: width=error, clock-domain=warning, ENABLE(tkeep)=warning")
+
+
+def test_check_interfaces_chain_a_end_to_end():
+    from specloop.compose.compatibility import CompatibilityChecker
+
+    chain = [(n, _axis_module(n)) for n in
+             ["axis_register", "axis_fifo", "axis_frame_length_adjust", "axis_rate_limit"]]
+    res = CompatibilityChecker().check_interfaces(chain)
+    assert res.ok, f"Chain A end-to-end had errors: {[i.message for i in res.errors]}"
+    assert not res.warnings, f"uniform Chain A should have no warnings: {[i.message for i in res.warnings]}"
+    print("  OK end-to-end: 4-stage uniform AXIS pipeline passes bundle check (0 errors, 0 warnings)")
+
+
+def test_select_interface_aware_picks_axis_fifo():
+    """Headline: with fifo_sync out-scoring axis_fifo (the live ranking), interface-
+    aware selection still picks axis_fifo and reports fifo_sync excluded."""
+    import tempfile
+    from specloop.compose.pipeline import CompositionPipeline
+    from specloop.search.searcher import SearchResult
+
+    with tempfile.TemporaryDirectory() as td:
+        work = Path(td)
+        (work / "axis_fifo.ir.json").write_text(_axis_module("axis_fifo").model_dump_json())
+        (work / "axis_async_fifo.ir.json").write_text(
+            _axis_module("axis_async_fifo", clk=None).model_dump_json())
+        (work / "fifo_sync.ir.json").write_text(_mem_fifo().model_dump_json())
+        reg_ir = _axis_module("axis_register")
+
+        def sr(name: str, score: float) -> SearchResult:
+            return SearchResult(module_name=name, module_type="x", score=score,
+                                assertion_count=10, confidence=1.0, assertion_summary=[],
+                                file_path=f"{name}.v", record_id="")
+
+        # fifo_sync out-scores the AXIS blocks, exactly like the live buffer query.
+        eligible = [sr("fifo_sync", 0.663), sr("axis_async_fifo", 0.659), sr("axis_fifo", 0.645)]
+        plan = _plan("reg", "buf", "sink", conns=[
+            Connection(from_id="reg", from_port="m_axis_tdata", to_id="buf", to_port="s_axis_tdata"),
+            Connection(from_id="buf", from_port="m_axis_tdata", to_id="sink", to_port="s_axis_tdata"),
+        ])
+        pipe = CompositionPipeline(client=None, qdrant_url="", collection="", embed_model="")
+        best, ir, ppa_used, note = pipe._select_interface_aware(
+            eligible, {"slave", "master"}, "buf", plan, {"reg": reg_ir}, work, {}, None,
+        )
+        assert best.module_name == "axis_fifo", f"picked {best.module_name}, expected axis_fifo ({note})"
+        assert "fifo_sync" in note, f"fifo_sync should be reported excluded: {note}"
+        print(f"  OK selection: axis_fifo chosen over higher-scoring fifo_sync/async_fifo ({note})")
+
+
+# --------------------------------------------------------------------------
+# Improvement 6 — carried-proof spine (deterministic wrapper + carried + interaction)
+# --------------------------------------------------------------------------
+
+def _axis_sm(sfid: str, module: str, **kw) -> SelectedModule:
+    ir = _axis_module(module, **kw)
+    return SelectedModule(sub_function_id=sfid, search_result=_sr(), ir=ir, rtl_path=Path(ir.file))
+
+
+def _conn(x: str, y: str) -> Connection:
+    return Connection(from_id=x, from_port="m_axis_tdata", to_id=y, to_port="s_axis_tdata")
+
+
+def test_order_axis_pipeline():
+    from specloop.compose.axis_pipeline import order_axis_pipeline
+
+    sel = [_axis_sm("a", "m_a"), _axis_sm("b", "m_b"), _axis_sm("c", "m_c")]
+    ordered = order_axis_pipeline(_plan("a", "b", "c", conns=[_conn("a", "b"), _conn("b", "c")]), sel)
+    assert ordered and [s.sub_function_id for s in ordered] == ["a", "b", "c"]
+    # connection topology, not list order, decides the chain
+    rev = order_axis_pipeline(_plan("c", "a", "b", conns=[_conn("a", "b"), _conn("b", "c")]), sel)
+    assert [s.sub_function_id for s in rev] == ["a", "b", "c"]
+    # fan-out is not a clean line
+    assert order_axis_pipeline(_plan("a", "b", "c", conns=[_conn("a", "b"), _conn("a", "c")]), sel) is None
+    # a bare-memory FIFO in the chain (no s_axis/m_axis bundle) → not a pipeline
+    bad = [_axis_sm("a", "m_a"),
+           SelectedModule(sub_function_id="b", search_result=_sr(), ir=_mem_fifo(), rtl_path=Path("x.v")),
+           _axis_sm("c", "m_c")]
+    assert order_axis_pipeline(_plan("a", "b", "c", conns=[_conn("a", "b"), _conn("b", "c")]), bad) is None
+    print("  OK order: linear AXIS chain ordered head→tail; fan-out & non-AXIS member rejected")
+
+
+def test_emit_pipeline_wrapper_structure():
+    from specloop.compose.axis_pipeline import order_axis_pipeline, emit_pipeline_wrapper
+
+    sel = [_axis_sm("a", "modA"), _axis_sm("b", "modB")]
+    ordered = order_axis_pipeline(_plan("a", "b", conns=[_conn("a", "b")]), sel)
+    sv = emit_pipeline_wrapper("topcomp", ordered, {"modB": {"DEPTH": "32"}})
+    assert "module topcomp (" in sv and sv.rstrip().endswith("endmodule")
+    assert "modA inst_a" in sv and "modB #(.DEPTH(32)) inst_b" in sv
+    assert "hop_a_b_tdata" in sv and "hop_a_b_tready" in sv          # internal boundary wires
+    assert ".s_axis_tdata(s_axis_tdata)" in sv                       # head slave at top
+    assert ".m_axis_tdata(m_axis_tdata)" in sv                       # tail master at top
+    assert ".s_axis_tdata(hop_a_b_tdata)" in sv                      # b consumes the hop wire
+    assert "assert" not in sv                                        # wrapper is pure RTL
+    print("  OK wrapper: top ports + per-hop bundle wires + safe param override, no assertions")
+
+
+def test_build_carried_bind_counts():
+    import tempfile
+    from specloop.compose.axis_pipeline import order_axis_pipeline, build_carried_bind
+
+    sel = [_axis_sm("a", "modA"), _axis_sm("b", "modB"), _axis_sm("c", "modC")]
+    ordered = order_axis_pipeline(_plan("a", "b", "c", conns=[_conn("a", "b"), _conn("b", "c")]), sel)
+    with tempfile.TemporaryDirectory() as td:
+        work = Path(td)
+        for mod, n in [("modA", 3), ("modB", 4), ("modC", 2)]:
+            asserts = "\n".join(f"    ap_{mod}_{i}: assert(1'b1);" for i in range(n))
+            (work / f"{mod}.bind.sv").write_text(
+                f"module {mod}_spec(input logic clk);\n  always @(posedge clk) begin\n"
+                f"{asserts}\n  end\nendmodule\nbind {mod} {mod}_spec s (.*);\n")
+        cb = build_carried_bind("topc", ordered, work)
+    # 2 internal hops + 1 output boundary = 3 boundaries × 3 + 2 reset = 11 interaction
+    assert cb.n_interaction == 3 * 3 + 2, cb.n_interaction
+    assert cb.n_carried == 3 + 4 + 2, cb.n_carried
+    assert "bind topc topc_spec" in cb.bind_sv and "carried proof: modA" in cb.bind_sv
+    assert any(e.category == "interaction" for e in cb.assertion_index)
+    assert any(e.category == "inherited" for e in cb.assertion_index)
+    print(f"  OK carried bind: {cb.n_interaction} interaction + {cb.n_carried} carried; categorized index")
+
+
+def _find_sby() -> str | None:
+    import shutil
+    sby = shutil.which("sby") or str(ROOT / "oss-cad-suite" / "bin" / "sby")
+    return sby if Path(sby).exists() else None
+
+
+def _sby_verdict(sby: str, td: Path, files: dict[str, str], top: str, formal: str) -> str:
+    """Write `files` into td, run a depth-3 BMC with `formal` read -formal, return
+    the final DONE verdict (PASS/FAIL/...)."""
+    import re
+    import subprocess
+    for name, text in files.items():
+        (td / name).write_text(text)
+    reads = "\n".join(f"read -sv {n}" for n in files if n != formal)
+    cfg = (f"[options]\nmode bmc\ndepth 3\n[engines]\nsmtbmc\n[script]\n{reads}\n"
+           f"read -sv -formal {formal}\nprep -top {top}\n[files]\n" + "\n".join(files) + "\n")
+    (td / "t.sby").write_text(cfg)
+    p = subprocess.run([sby, "-f", "t.sby"], cwd=str(td), capture_output=True, text=True, timeout=120)
+    m = re.findall(r"DONE \((\w+)", p.stdout + p.stderr)
+    return m[-1] if m else "?"
+
+
+def test_emit_roundtrip_harness_structure():
+    from specloop.compose.axis_pipeline import order_axis_pipeline, emit_roundtrip_harness
+
+    sel = [_axis_sm("a", "modA"), _axis_sm("b", "modB")]
+    ordered = order_axis_pipeline(_plan("a", "b", conns=[_conn("a", "b")]), sel)
+    h = emit_roundtrip_harness("topc", ordered, max_len=4)
+    assert h is not None and h.top_module == "topc_rt_harness"
+    assert "(* anyconst *)" in h.harness_sv                     # symbolic frame
+    assert "topc dut (" in h.harness_sv                         # instantiates the wrapper, no bind
+    assert not any(l.strip().startswith("bind ") for l in h.harness_sv.splitlines())  # closed harness
+    assert "ap_rt_data" in h.harness_sv and "ap_rt_complete" in h.harness_sv
+    assert {e.name for e in h.assertion_index} >= {"ap_rt_data", "ap_rt_complete"}
+    # width-changing pipeline → identity can't hold → None
+    mismatched = [_axis_sm("a", "modA", width=8), _axis_sm("b", "modB", width=16)]
+    assert emit_roundtrip_harness("x", mismatched, max_len=4) is None
+    print("  OK harness: closed (no bind), symbolic frame + completeness assert; width-change → None")
+
+
+def test_sby_checks_inlined_not_bind():
+    """Toolchain guard for the change-#3 discovery: the sby backend's Yosys
+    front-end CHECKS inlined assertions but SILENTLY IGNORES SystemVerilog `bind`.
+    Encodes this so a bind-attached 'proof' can never again pass as sound."""
+    import tempfile
+    sby = _find_sby()
+    if sby is None:
+        print("  SKIP sby inline/bind guard (sby not found)")
+        return
+    inl = ("module d(input clk, input [7:0] x);\n"
+           "  always @(posedge clk) ap_fail: assert(1'b0);\nendmodule\n")
+    dut = "module d(input clk, input [7:0] x, output [7:0] y); assign y=x; endmodule\n"
+    spec = ("module s(input clk, input [7:0] x);\n"
+            "  always @(posedge clk) ap_bind_fail: assert(1'b0);\nendmodule\n"
+            "bind d s si(.*);\n")
+    with tempfile.TemporaryDirectory() as td:
+        a = Path(td) / "a"; a.mkdir()
+        b = Path(td) / "b"; b.mkdir()
+        inlined = _sby_verdict(sby, a, {"d.sv": inl}, "d", "d.sv")
+        bound = _sby_verdict(sby, b, {"dut.sv": dut, "spec.sv": spec}, "d", "spec.sv")
+    assert inlined == "FAIL", f"sby must CHECK inlined assertions, got {inlined}"
+    assert bound == "PASS", f"sby silently IGNORES bind (assert never checked), got {bound}"
+    print("  OK toolchain: sby checks inlined assertions (FAIL); silently ignores bind (PASS) — guard locked")
+
+
+def test_roundtrip_harness_proves_passthrough():
+    """Sound end-to-end: a 2-stage register pass-through round-trips identically
+    (BMC), and a deliberately-corrupted check produces a counterexample (proving
+    the harness genuinely verifies). Gated on sby + axis_register artifacts."""
+    import tempfile
+    from specloop.compose.axis_pipeline import order_axis_pipeline, emit_pipeline_wrapper, emit_roundtrip_harness
+    from specloop.compose.pipeline import _resolve_rtl_deps
+    from specloop.formal.sby_backend import SBYBackend
+
+    sby = _find_sby()
+    ir_file = WORK / "axis_register.ir.json"
+    if sby is None or not ir_file.exists():
+        print("  SKIP round-trip passthrough (sby / axis_register.ir.json absent)")
+        return
+    ir = ModuleIR.model_validate(json.loads(ir_file.read_text()))
+    if not Path(ir.file).exists():
+        print("  SKIP round-trip passthrough (corpus RTL absent)")
+        return
+    sel = [SelectedModule(sub_function_id=s, search_result=_sr(), ir=ir, rtl_path=Path(ir.file))
+           for s in ("r0", "r1")]
+    ordered = order_axis_pipeline(_plan("r0", "r1", conns=[_conn("r0", "r1")]), sel)
+    assert ordered is not None
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        (out / "w.sv").write_text(emit_pipeline_wrapper("w", ordered))
+        h = emit_roundtrip_harness("w", ordered, max_len=2)
+        (out / "h.sv").write_text(h.harness_sv)
+        deps = _resolve_rtl_deps([Path(ir.file)])
+        be = SBYBackend(sby_path=sby, timeout=200, depth=h.depth, flatten=True)
+        good = be.run(module_name=h.top_module, rtl_path=out / "w.sv", bind_path=out / "h.sv",
+                      deps=deps, work_dir=out, assertion_index=h.assertion_index, mode="bmc")
+        # corrupt the data check: must now produce a counterexample
+        bad_sv = h.harness_sv.replace("m_tdata == sym[out_idx*W +: W]",
+                                      "m_tdata == (sym[out_idx*W +: W] ^ 8'h01)")
+        (out / "hb.sv").write_text(bad_sv)
+        bad = be.run(module_name=h.top_module, rtl_path=out / "w.sv", bind_path=out / "hb.sv",
+                     deps=deps, work_dir=out, assertion_index=h.assertion_index, mode="bmc")
+    assert good.status == "pass", f"pass-through round-trip should hold, got {good.status}"
+    assert bad.status == "fail", f"corrupted check must fail (anti-vacuity), got {bad.status}"
+    print(f"  OK round-trip: 2-stage pass-through proves (N=2); corrupted reference → counterexample")
+
+
+# --------------------------------------------------------------------------
 
 def main() -> int:
     tests = [
@@ -295,6 +622,18 @@ def main() -> int:
         ("Improvement 3: inheritance guard-aware", test_inheritance_guard_aware),
         ("Improvement 3: missing bind graceful", test_inheritance_missing_bind_graceful),
         ("Improvement 4: synthesis PPA", test_synth_ppa),
+        ("Improvement 5: axis bundle extraction + roles", test_axis_bundle_extraction_and_roles),
+        ("Improvement 5: pair chain + reject mem-FIFO", test_pair_axis_chain_and_reject_memfifo),
+        ("Improvement 5: connection roles not over-excluded", test_connection_roles_not_over_excluded),
+        ("Improvement 5: width/clock/ENABLE diagnostics", test_pair_width_clock_enable_diagnostics),
+        ("Improvement 5: Chain A end-to-end bundle check", test_check_interfaces_chain_a_end_to_end),
+        ("Improvement 5: interface-aware selection picks axis_fifo", test_select_interface_aware_picks_axis_fifo),
+        ("Improvement 6: order linear AXIS pipeline", test_order_axis_pipeline),
+        ("Improvement 6: deterministic wrapper structure", test_emit_pipeline_wrapper_structure),
+        ("Improvement 6: carried-bind structure/counts", test_build_carried_bind_counts),
+        ("Improvement 7: round-trip harness structure", test_emit_roundtrip_harness_structure),
+        ("Improvement 7: sby checks inlined, ignores bind (guard)", test_sby_checks_inlined_not_bind),
+        ("Improvement 7: round-trip pass-through proves + anti-vacuity", test_roundtrip_harness_proves_passthrough),
     ]
     failures = 0
     for name, fn in tests:

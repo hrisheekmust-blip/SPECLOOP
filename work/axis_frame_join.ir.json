@@ -1,0 +1,318 @@
+{
+  "schema_version": "specloop.ir/v1",
+  "module": "axis_frame_join",
+  "file": "corpus/verilog-axis/rtl/axis_frame_join.v",
+  "lines": [
+    34,
+    329
+  ],
+  "parameters": [
+    {
+      "name": "S_COUNT",
+      "type": "int",
+      "default": "4",
+      "is_local": false
+    },
+    {
+      "name": "DATA_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "TAG_ENABLE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "TAG_WIDTH",
+      "type": "int",
+      "default": "16",
+      "is_local": false
+    },
+    {
+      "name": "CL_S_COUNT",
+      "type": "int",
+      "default": "2",
+      "is_local": true
+    },
+    {
+      "name": "TAG_WORD_WIDTH",
+      "type": "int",
+      "default": "2",
+      "is_local": true
+    },
+    {
+      "name": "CL_TAG_WORD_WIDTH",
+      "type": "int",
+      "default": "1",
+      "is_local": true
+    },
+    {
+      "name": "STATE_IDLE",
+      "type": "int",
+      "default": "2'b0",
+      "is_local": true
+    },
+    {
+      "name": "STATE_WRITE_TAG",
+      "type": "int",
+      "default": "2'b1",
+      "is_local": true
+    },
+    {
+      "name": "STATE_TRANSFER",
+      "type": "int",
+      "default": "2'b10",
+      "is_local": true
+    }
+  ],
+  "ports": [
+    {
+      "name": "clk",
+      "direction": "input",
+      "width": 1,
+      "is_clock": true,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "rst",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": true,
+      "reset_polarity": "high"
+    },
+    {
+      "name": "s_axis_tdata",
+      "direction": "input",
+      "width": 32,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tvalid",
+      "direction": "input",
+      "width": 4,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tready",
+      "direction": "output",
+      "width": 4,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tlast",
+      "direction": "input",
+      "width": 4,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tuser",
+      "direction": "input",
+      "width": 4,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tdata",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tvalid",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tready",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tlast",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tuser",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "tag",
+      "direction": "input",
+      "width": 16,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "busy",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    }
+  ],
+  "always_blocks": [
+    {
+      "kind": "always",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 117,
+      "end_line": 223,
+      "signals_written": [
+        "frame_ptr_next",
+        "m_axis_tdata_int",
+        "m_axis_tlast_int",
+        "m_axis_tuser_int",
+        "m_axis_tvalid_int",
+        "output_tuser_next",
+        "port_sel_next",
+        "s_axis_tready_next",
+        "state_next"
+      ],
+      "signals_read": [
+        "CL_S_COUNT",
+        "CL_TAG_WORD_WIDTH",
+        "DATA_WIDTH",
+        "STATE_IDLE",
+        "STATE_TRANSFER",
+        "STATE_WRITE_TAG",
+        "S_COUNT",
+        "TAG_ENABLE",
+        "TAG_WORD_WIDTH",
+        "frame_ptr_reg",
+        "input_tdata",
+        "input_tlast",
+        "input_tuser",
+        "input_tvalid",
+        "m_axis_tready_int_early",
+        "m_axis_tready_int_reg",
+        "output_tuser_reg",
+        "port_sel_reg",
+        "s_axis_tdata",
+        "s_axis_tvalid",
+        "state_reg",
+        "tag"
+      ]
+    },
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 225,
+      "end_line": 246,
+      "signals_written": [
+        "busy_reg",
+        "frame_ptr_reg",
+        "output_tuser_reg",
+        "port_sel_reg",
+        "s_axis_tready_reg",
+        "state_reg"
+      ],
+      "signals_read": [
+        "CL_S_COUNT",
+        "CL_TAG_WORD_WIDTH",
+        "STATE_IDLE",
+        "S_COUNT",
+        "clk",
+        "frame_ptr_next",
+        "output_tuser_next",
+        "port_sel_next",
+        "rst",
+        "s_axis_tready_next",
+        "state_next"
+      ]
+    },
+    {
+      "kind": "always",
+      "sensitivity": [],
+      "has_async_reset": false,
+      "start_line": 272,
+      "end_line": 298,
+      "signals_written": [
+        "m_axis_tvalid_next",
+        "store_axis_int_to_output",
+        "store_axis_int_to_temp",
+        "store_axis_temp_to_output",
+        "temp_m_axis_tvalid_next"
+      ],
+      "signals_read": [
+        "m_axis_tready",
+        "m_axis_tready_int_reg",
+        "m_axis_tvalid_int",
+        "m_axis_tvalid_reg",
+        "temp_m_axis_tvalid_reg"
+      ]
+    },
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 300,
+      "end_line": 327,
+      "signals_written": [
+        "m_axis_tdata_reg",
+        "m_axis_tlast_reg",
+        "m_axis_tready_int_reg",
+        "m_axis_tuser_reg",
+        "m_axis_tvalid_reg",
+        "temp_m_axis_tdata_reg",
+        "temp_m_axis_tlast_reg",
+        "temp_m_axis_tuser_reg",
+        "temp_m_axis_tvalid_reg"
+      ],
+      "signals_read": [
+        "clk",
+        "m_axis_tdata_int",
+        "m_axis_tlast_int",
+        "m_axis_tready_int_early",
+        "m_axis_tuser_int",
+        "m_axis_tvalid_next",
+        "rst",
+        "store_axis_int_to_output",
+        "store_axis_int_to_temp",
+        "store_axis_temp_to_output",
+        "temp_m_axis_tvalid_next"
+      ]
+    }
+  ],
+  "submodules": [],
+  "imports": [],
+  "module_type": "sequential",
+  "parse_status": "ok",
+  "confidence": 1.0
+}

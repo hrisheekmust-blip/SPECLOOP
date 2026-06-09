@@ -1,0 +1,285 @@
+{
+  "schema_version": "specloop.ir/v1",
+  "module": "axis_srl_register",
+  "file": "corpus/verilog-axis/rtl/axis_srl_register.v",
+  "lines": [
+    34,
+    156
+  ],
+  "parameters": [
+    {
+      "name": "DATA_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "KEEP_ENABLE",
+      "type": "int",
+      "default": "1'b0",
+      "is_local": false
+    },
+    {
+      "name": "KEEP_WIDTH",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "LAST_ENABLE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "ID_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "ID_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "DEST_ENABLE",
+      "type": "int",
+      "default": "0",
+      "is_local": false
+    },
+    {
+      "name": "DEST_WIDTH",
+      "type": "int",
+      "default": "8",
+      "is_local": false
+    },
+    {
+      "name": "USER_ENABLE",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "USER_WIDTH",
+      "type": "int",
+      "default": "1",
+      "is_local": false
+    },
+    {
+      "name": "KEEP_OFFSET",
+      "type": "int",
+      "default": "8",
+      "is_local": true
+    },
+    {
+      "name": "LAST_OFFSET",
+      "type": "int",
+      "default": "8",
+      "is_local": true
+    },
+    {
+      "name": "ID_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "DEST_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "USER_OFFSET",
+      "type": "int",
+      "default": "9",
+      "is_local": true
+    },
+    {
+      "name": "WIDTH",
+      "type": "int",
+      "default": "10",
+      "is_local": true
+    }
+  ],
+  "ports": [
+    {
+      "name": "clk",
+      "direction": "input",
+      "width": 1,
+      "is_clock": true,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "rst",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": true,
+      "reset_polarity": "high"
+    },
+    {
+      "name": "s_axis_tdata",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tkeep",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tvalid",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tready",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tlast",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tid",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tdest",
+      "direction": "input",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "s_axis_tuser",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tdata",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tkeep",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tvalid",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tready",
+      "direction": "input",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tlast",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tid",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tdest",
+      "direction": "output",
+      "width": 8,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    },
+    {
+      "name": "m_axis_tuser",
+      "direction": "output",
+      "width": 1,
+      "is_clock": false,
+      "is_reset": false,
+      "reset_polarity": null
+    }
+  ],
+  "always_blocks": [
+    {
+      "kind": "always",
+      "sensitivity": [
+        "posedge clk"
+      ],
+      "has_async_reset": false,
+      "start_line": 131,
+      "end_line": 154,
+      "signals_written": [
+        "data_reg",
+        "full_reg",
+        "i",
+        "ptr_reg",
+        "valid_reg"
+      ],
+      "signals_read": [
+        "clk",
+        "m_axis_tready",
+        "m_axis_tvalid",
+        "rst",
+        "s_axis",
+        "s_axis_tready",
+        "s_axis_tvalid"
+      ]
+    }
+  ],
+  "submodules": [],
+  "imports": [],
+  "module_type": "sequential",
+  "parse_status": "ok",
+  "confidence": 1.0
+}
