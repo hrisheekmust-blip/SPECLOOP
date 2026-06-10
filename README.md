@@ -7,8 +7,7 @@
 
 ## Demo
 
-<!-- demo GIF: record with scripts/record_demo.sh, convert with agg (see script header) -->
-![SpecLoop demo](docs/demo.gif)
+
 
 ```text
 $ python -m specloop.compose.e2e "register, buffer, normalize frame length, and rate-limit an 8-bit stream"
@@ -27,7 +26,7 @@ Every line of that trace is load-bearing: the roles come from an LLM constrained
 Linux x64, Python ≥ 3.11, ~6 GB disk (Python deps incl. torch, plus the OSS CAD Suite formal toolchain). An `ANTHROPIC_API_KEY` is needed only for the live demo's planning stage — the entire test suite, including all formal proofs, runs without any API key.
 
 ```bash
-git clone <this-repo> specloop && cd specloop
+git clone https://github.com/hrisheekmust-blip/SPECLOOP.git specloop && cd specloop
 bash scripts/setup.sh        # venv + deps, corpus submodule, pinned yosys/sby, runs all test suites
 source .venv/bin/activate
 export PATH="$PWD/oss-cad-suite/bin:$PATH"

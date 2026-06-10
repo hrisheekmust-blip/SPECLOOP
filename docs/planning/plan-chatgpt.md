@@ -2,13 +2,13 @@
 
 ## System architecture and design principles
 
-The product brief defines SpecLoop as a fully on-premises system with two layers: a verified spec-and-assertion generation pipeline over undocumented RTL, and a semantic search layer over the resulting documented codebase. It also makes the most important architectural decision explicit: **do not** treat RTL reconstruction plus equivalence checking as the primary verification method; instead, generate assertions and verify the original RTL directly. That is the right pivot. In practice, SpecLoop should use assertion-driven formal as the source of truth, and reserve equivalence checking for validating SpecLoop’s own preprocessing transforms, wrappers, or future RTL-refactoring features. fileciteturn0file0L3-L6 fileciteturn0file0L17-L18
+The product brief defines SpecLoop as a fully on-premises system with two layers: a verified spec-and-assertion generation pipeline over undocumented RTL, and a semantic search layer over the resulting documented codebase. It also makes the most important architectural decision explicit: **do not** treat RTL reconstruction plus equivalence checking as the primary verification method; instead, generate assertions and verify the original RTL directly. That is the right pivot. In practice, SpecLoop should use assertion-driven formal as the source of truth, and reserve equivalence checking for validating SpecLoop’s own preprocessing transforms, wrappers, or future RTL-refactoring features.  
 
-For a solo developer working toward an MVP in four months, the right architecture is a **modular monolith with plugin interfaces**, not a microservice mesh. Put everything in one Python repository, with containerized adapters for heavyweight dependencies such as Surelog, Yosys/SymbiYosys, EQY, Verilator, and Jasper. Use stable internal contracts between stages so the implementation can later split into services without rewriting the core. This keeps the build simple enough for a CLI-first MVP while still matching the brief’s eventual-platform ambition. fileciteturn0file0L1-L6 fileciteturn0file0L28-L31
+For a solo developer working toward an MVP in four months, the right architecture is a **modular monolith with plugin interfaces**, not a microservice mesh. Put everything in one Python repository, with containerized adapters for heavyweight dependencies such as Surelog, Yosys/SymbiYosys, EQY, Verilator, and Jasper. Use stable internal contracts between stages so the implementation can later split into services without rewriting the core. This keeps the build simple enough for a CLI-first MVP while still matching the brief’s eventual-platform ambition.  
 
 The end-to-end flow should be:
 
-**repository or filelist input → build metadata resolution → preprocessing and elaboration → module IR and hierarchy graph → context packing → LLM generation of behaviors/specs/assertions → backend-specific assertion lowering → formal execution → counterexample summarization and repair loop → structured report store → semantic index and search API.** That flow directly implements the brief’s required stages: parsing, preamble preservation, dependency closure, LLM generation, formal verification, iterative refinement, and structured per-module output. fileciteturn0file0L9-L15
+**repository or filelist input → build metadata resolution → preprocessing and elaboration → module IR and hierarchy graph → context packing → LLM generation of behaviors/specs/assertions → backend-specific assertion lowering → formal execution → counterexample summarization and repair loop → structured report store → semantic index and search API.** That flow directly implements the brief’s required stages: parsing, preamble preservation, dependency closure, LLM generation, formal verification, iterative refinement, and structured per-module output. 
 
 A practical repository layout is:
 
@@ -108,7 +108,7 @@ If elaboration fails
   → emit PartialModuleIR + failure classification
 ```
 
-The **PreambleCapsule** is not optional. The brief is correct that macros, `timescale`, defines, and related compile context must be preserved or downstream formal tooling will break. In practice, preserve at least these items per compilation unit and per extracted wrapper: `include` closure, `define` set, include directories, `timescale`, `default_nettype`, `celldefine`, `begin_keywords/end_keywords`, package imports, and tool-specific compatibility flags. A module should never be extracted or wrapped as a naked file fragment; always materialize it as **preamble capsule + package/import context + dependency closure + bind/assertion files**. fileciteturn0file0L9-L15 citeturn32view0turn34view0turn35view0
+The **PreambleCapsule** is not optional. The brief is correct that macros, `timescale`, defines, and related compile context must be preserved or downstream formal tooling will break. In practice, preserve at least these items per compilation unit and per extracted wrapper: `include` closure, `define` set, include directories, `timescale`, `default_nettype`, `celldefine`, `begin_keywords/end_keywords`, package imports, and tool-specific compatibility flags. A module should never be extracted or wrapped as a naked file fragment; always materialize it as **preamble capsule + package/import context + dependency closure + bind/assertion files**.  citeturn32view0turn34view0turn35view0
 
 For **build metadata resolution**, SpecLoop should support four sources in priority order: explicit user filelists, FuseSoC cores, Bender manifests, and directory discovery. FuseSoC is a package manager and build system for HDL cores using CAPI2 core files; Bender is a dependency manager for hardware projects and can emit source lists; and lightweight Rust filelist parsers already exist for standard `.f`/`.flist` style manifests with include-dir and macro extraction. This lets SpecLoop interoperate with real projects instead of forcing a new manifest format. citeturn26search10turn26search4turn26search0turn26search12turn26search2
 
@@ -340,7 +340,7 @@ EQY should **not** be the primary validator for “spec correctness,” because 
 - validating that SpecLoop’s **reduced or wrapped proof harness** is equivalent to the original module at the observable boundary
 - validating future automated RTL refactors, simplifications, or stubbed reductions
 
-That is where EQY shines. Its documentation exposes a rich partitioning flow, per-strategy statuses, and output artifacts such as matched IDs, partitions, and strategy logs. The `sby` strategy inside EQY is especially useful because it delegates partition proofs to SymbiYosys, with configurable engines, timeouts, and x-prop handling. fileciteturn0file0L17-L18 citeturn29view2turn29view1turn30search2
+That is where EQY shines. Its documentation exposes a rich partitioning flow, per-strategy statuses, and output artifacts such as matched IDs, partitions, and strategy logs. The `sby` strategy inside EQY is especially useful because it delegates partition proofs to SymbiYosys, with configurable engines, timeouts, and x-prop handling.  citeturn29view2turn29view1turn30search2
 
 A representative `.eqy` file for validating a reduced wrapper would look like:
 
@@ -451,7 +451,7 @@ That cap is my engineering recommendation, not a figure endorsed by a single pap
 
 ## On-prem LLM deployment
 
-The brief is also right about the deployment constraint: customer RTL cannot leave the customer environment. Model selection, tuning, and serving therefore have to be designed for fully local use, with any frontier-model distillation or weak-label generation happening **only on public datasets outside customer data paths**, if you use it at all. fileciteturn0file0L19-L20
+The brief is also right about the deployment constraint: customer RTL cannot leave the customer environment. Model selection, tuning, and serving therefore have to be designed for fully local use, with any frontier-model distillation or weak-label generation happening **only on public datasets outside customer data paths**, if you use it at all. 
 
 The strongest open-source strategy is **not** to search for one magical model that does everything. Use a **task-specialized local model stack**:
 
@@ -476,7 +476,7 @@ The data pipeline for fine-tuning should combine **public instruction-style RTL 
 - **OpenCores / FreeCores / HDLBits-derived corpora** for breadth
 - **DeepCircuitX** or other repo-level corpora for dependency-closure and repository-context training
 
-That directly addresses the brief’s quality-gap concern with public-data-only domain adaptation. fileciteturn0file0L19-L27 citeturn18search8turn18search5turn18search0turn19search1turn19search0turn18search3
+That directly addresses the brief’s quality-gap concern with public-data-only domain adaptation.  citeturn18search8turn18search5turn18search0turn19search1turn19search0turn18search3
 
 The right fine-tuning curriculum is:
 
@@ -512,7 +512,7 @@ To close the gap with frontier models without violating the on-prem rule, use fi
 - retrieval of similar verified modules and assertion patterns
 - task specialization instead of one giant model
 
-That combination is much more realistic than hoping a single generic open model will suddenly match frontier proprietary models on RTL reasoning. fileciteturn0file0L20-L27 citeturn20search5turn20search0turn27search1
+That combination is much more realistic than hoping a single generic open model will suddenly match frontier proprietary models on RTL reasoning.  citeturn20search5turn20search0turn27search1
 
 ## Semantic search layer
 
@@ -525,7 +525,7 @@ The second layer of SpecLoop only becomes trustworthy if it indexes **verified k
 - child-instance summaries and dependency graph features
 - proof metadata such as `proven`, `covered`, `vacuous`, `unknown`
 
-That is what turns the search index into a behavior index instead of a source-code grep. fileciteturn0file0L5-L6 fileciteturn0file0L27-L31
+That is what turns the search index into a behavior index instead of a source-code grep.  
 
 The vector database should be **Qdrant**. Public Qdrant documentation makes it a good fit because it supports HNSW indexing, payload filtering, and storage/quantization features that are useful in production retrieval systems. More importantly for SpecLoop, the hybrid dense-plus-filtered retrieval style fits the problem much better than plain dense search alone. citeturn4search7turn5search15
 
@@ -607,7 +607,7 @@ For the MVP, keep composition conservative: return “likely composition candida
 
 ## Failure classification and hard problems
 
-The brief explicitly asks for per-module failure classification, including compile errors, mismatches, timeouts, dependency issues, truncation, and more. That should be implemented as a **two-layer classifier**: first, deterministic rules over parser/formal logs; second, a small model-based classifier only for unresolved or ambiguous cases. NVIDIA’s VerilogEval tooling already includes classification of common compile and runtime failures, and more recent RTL-LLM error-analysis work shows the value of separating syntax, domain-knowledge, ambiguity, and reasoning failures instead of lumping everything into “model bad.” fileciteturn0file0L13-L15 citeturn27search0turn27search2turn27search1
+The brief explicitly asks for per-module failure classification, including compile errors, mismatches, timeouts, dependency issues, truncation, and more. That should be implemented as a **two-layer classifier**: first, deterministic rules over parser/formal logs; second, a small model-based classifier only for unresolved or ambiguous cases. NVIDIA’s VerilogEval tooling already includes classification of common compile and runtime failures, and more recent RTL-LLM error-analysis work shows the value of separating syntax, domain-knowledge, ambiguity, and reasoning failures instead of lumping everything into “model bad.”  citeturn27search0turn27search2turn27search1
 
 The output format should look like this:
 
@@ -670,27 +670,27 @@ Use this top-level taxonomy:
   - `eqy_non_equivalent_wrapper`
   - `legacy_rtl_rebuild_failure`
 
-That last class should exist only for wrapper/refactor validation and legacy experiments, **not** as the primary product path, because the brief’s architectural pivot away from reconstruction is correct. fileciteturn0file0L17-L18
+That last class should exist only for wrapper/refactor validation and legacy experiments, **not** as the primary product path, because the brief’s architectural pivot away from reconstruction is correct. 
 
 The six hard problems in the brief deserve separate treatment.
 
-**Open-source model quality gap.** This is real. The research and benchmark trend shows that generic open code models underperform strong proprietary models on RTL generation and reasoning, but that gap narrows sharply when the open models are trained on domain-specific data and corrected with tool feedback. CodeV, CodeV-R1, VeriRL, and the broader “understanding and mitigating RTL errors” line of work all converge on the same answer: curated domain data, tool-grounded self-correction, and retrieval matter more than naïvely scaling an untuned model. SpecLoop should therefore invest first in public-data domain SFT and repair loops, not in trying to host the biggest generic code model it can afford. fileciteturn0file0L20-L23 citeturn20search5turn20search0turn27search1
+**Open-source model quality gap.** This is real. The research and benchmark trend shows that generic open code models underperform strong proprietary models on RTL generation and reasoning, but that gap narrows sharply when the open models are trained on domain-specific data and corrected with tool feedback. CodeV, CodeV-R1, VeriRL, and the broader “understanding and mitigating RTL errors” line of work all converge on the same answer: curated domain data, tool-grounded self-correction, and retrieval matter more than naïvely scaling an untuned model. SpecLoop should therefore invest first in public-data domain SFT and repair loops, not in trying to host the biggest generic code model it can afford.  citeturn20search5turn20search0turn27search1
 
-**Assertion quality and coverage.** “All assertions proved” does not mean “important behaviors covered.” The solution is a composite coverage metric: behavior-to-assertion mapping, non-vacuity checks, mutation score, and structural span. Use machine-extracted behavior points from the behavior-extraction stage as the denominator; require at least one non-vacuous assertion or coverpoint per major behavior; add mutation testing by inserting bounded behavioral mutants; and record the fraction of high-centrality control and state signals touched by non-vacuous properties. CoverAssert’s coverage-guided approach and standard vacuity guidance both support this direction. fileciteturn0file0L23-L24 citeturn22academia20turn24search15turn24search3
+**Assertion quality and coverage.** “All assertions proved” does not mean “important behaviors covered.” The solution is a composite coverage metric: behavior-to-assertion mapping, non-vacuity checks, mutation score, and structural span. Use machine-extracted behavior points from the behavior-extraction stage as the denominator; require at least one non-vacuous assertion or coverpoint per major behavior; add mutation testing by inserting bounded behavioral mutants; and record the fraction of high-centrality control and state signals touched by non-vacuous properties. CoverAssert’s coverage-guided approach and standard vacuity guidance both support this direction.  citeturn22academia20turn24search15turn24search3
 
-**Scalability to large modules.** Do not feed one giant module to the model as raw text. Instead, implement **structured hierarchical slicing**: split by always blocks, FSM regions, interface logic, and high-centrality cones of influence; summarize each slice; then recompose a module-level behavior set from slice summaries plus the instance graph. Repo-level hardware datasets such as DeepCircuitX and recent work on repository-context benchmarks are useful evidence that repository context and hierarchy matter. In SpecLoop, the concrete solution is a context packer that chooses the top-N slices by relevance for each behavior family. fileciteturn0file0L24-L25 citeturn18search3turn19search5
+**Scalability to large modules.** Do not feed one giant module to the model as raw text. Instead, implement **structured hierarchical slicing**: split by always blocks, FSM regions, interface logic, and high-centrality cones of influence; summarize each slice; then recompose a module-level behavior set from slice summaries plus the instance graph. Repo-level hardware datasets such as DeepCircuitX and recent work on repository-context benchmarks are useful evidence that repository context and hierarchy matter. In SpecLoop, the concrete solution is a context packer that chooses the top-N slices by relevance for each behavior family.  citeturn18search3turn19search5
 
-**Real industrial RTL messiness.** This is primarily a frontend-engineering problem, not an LLM problem. The way through it is parser pluralism plus explicit trust boundaries: Surelog for elaboration, slang for semantics, Verible/tree-sitter for recovery, vendor primitive libraries, encrypted-block blackboxing, and log-driven failure categories. The product should never pretend to have “understood” encrypted or partial blocks it could not actually elaborate. Report those as opaque dependencies, lower confidence, and keep going on the rest of the hierarchy. fileciteturn0file0L25-L26 citeturn32view1turn31view3turn32view2turn34view0
+**Real industrial RTL messiness.** This is primarily a frontend-engineering problem, not an LLM problem. The way through it is parser pluralism plus explicit trust boundaries: Surelog for elaboration, slang for semantics, Verible/tree-sitter for recovery, vendor primitive libraries, encrypted-block blackboxing, and log-driven failure categories. The product should never pretend to have “understood” encrypted or partial blocks it could not actually elaborate. Report those as opaque dependencies, lower confidence, and keep going on the rest of the hierarchy.  citeturn32view1turn31view3turn32view2turn34view0
 
-**Formal tool integration.** The solution is a normalized adapter API plus backend profiles. Yosys/SBY is the portable open-source proof engine. EQY is the normalization and transform-checking engine. Jasper is the industrial full-SVA engine. The common denominator should be a `FormalResult` schema, not a common source syntax forced across all tools. That is what allows backend-specific lowering while giving the rest of SpecLoop a stable interface. fileciteturn0file0L26-L27 citeturn24search16turn29view2turn25search1turn28search0
+**Formal tool integration.** The solution is a normalized adapter API plus backend profiles. Yosys/SBY is the portable open-source proof engine. EQY is the normalization and transform-checking engine. Jasper is the industrial full-SVA engine. The common denominator should be a `FormalResult` schema, not a common source syntax forced across all tools. That is what allows backend-specific lowering while giving the rest of SpecLoop a stable interface.  citeturn24search16turn29view2turn25search1turn28search0
 
-**Semantic search embedding.** The solution is not a single “best” generic code embedding. Use a hybrid text-plus-RTL retrieval stack and fine-tune an RTL-aware encoder over verified summaries, assertion text, module pairs, and contrastive behavioral labels. DeepRTL2 is the best direct signal here; GraphCodeBERT and UniXcoder provide useful architectural precedents for adding structure-aware signals to code retrieval. SpecLoop should eventually train its own encoder on public RTL pairs and use verified assertions as extra supervision. fileciteturn0file0L27-L31 citeturn17search5turn4search0turn4search1
+**Semantic search embedding.** The solution is not a single “best” generic code embedding. Use a hybrid text-plus-RTL retrieval stack and fine-tune an RTL-aware encoder over verified summaries, assertion text, module pairs, and contrastive behavioral labels. DeepRTL2 is the best direct signal here; GraphCodeBERT and UniXcoder provide useful architectural precedents for adding structure-aware signals to code retrieval. SpecLoop should eventually train its own encoder on public RTL pairs and use verified assertions as extra supervision.  citeturn17search5turn4search0turn4search1
 
 Open questions remain. Public documentation for Jasper is not as operationally explicit as the open-source Yosys stack, so the exact emitted TCL should be validated against the customer’s installed version and license bundle. Also, some of the strongest RTL-specialized models are newly published enough that their weight-release and licensing status may vary; the recipes and reported results are solid, but the specific deployable artifact you choose will depend on what is actually available inside your environment. citeturn25search1turn20search5turn20search0
 
 ## Implementation roadmap
 
-The brief says the MVP should run on a real open RTL codebase such as PicoRV32, generate verified assertions per module, emit a structured verification report with confidence, and demonstrate semantic search by behavioral description. The roadmap below is tuned exactly to that outcome. fileciteturn0file0L28-L31
+The brief says the MVP should run on a real open RTL codebase such as PicoRV32, generate verified assertions per module, emit a structured verification report with confidence, and demonstrate semantic search by behavioral description. The roadmap below is tuned exactly to that outcome. 
 
 | Week | What to build | Exit criteria | Demo at end of week |
 |---|---|---|---|
@@ -713,9 +713,9 @@ The brief says the MVP should run on a real open RTL codebase such as PicoRV32, 
 
 The milestone boundaries should look like this:
 
-- **End of month one:** robust parsing and hierarchy extraction on a real codebase, including preamble preservation and dependency closure. fileciteturn0file0L9-L11
-- **End of month two:** assertion generation and open-source formal proof loop working on small and medium modules. fileciteturn0file0L12-L15
-- **End of month three:** confidence scoring, failure taxonomy, and semantic search over verified documentation. fileciteturn0file0L15-L15 fileciteturn0file0L27-L31
-- **End of month four:** polished end-to-end MVP, Jasper adapter skeleton, and a demoable workflow on PicoRV32 plus one additional open RTL codebase. fileciteturn0file0L28-L31
+- **End of month one:** robust parsing and hierarchy extraction on a real codebase, including preamble preservation and dependency closure. 
+- **End of month two:** assertion generation and open-source formal proof loop working on small and medium modules. 
+- **End of month three:** confidence scoring, failure taxonomy, and semantic search over verified documentation.  
+- **End of month four:** polished end-to-end MVP, Jasper adapter skeleton, and a demoable workflow on PicoRV32 plus one additional open RTL codebase. 
 
 If you follow this order, the first credible demo appears by **week eight** and the first product-shaped demo appears by **week twelve**. That is the right shape for a four-month solo build: get the parser and proof loop real first, then layer in search and commercial-tool integration after the core artifact pipeline is already trustworthy.
