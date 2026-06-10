@@ -1,4 +1,5 @@
 # SpecLoop
+![SpecLoop end-to-end demo](docs/demo.gif)
 
 **AI-assisted compositional formal verification for RTL.** SpecLoop takes a natural-language hardware request, decomposes it into an ordered pipeline of roles, retrieves a formally-proven RTL block for each role from a library of machine-checked components, wires them into a synthesizable composition, and then proves the *composition itself* correct by assume-guarantee reasoning — with mandatory anti-vacuity checks at every step. The thesis: LLMs are good at proposing hardware and terrible at being trusted, so every artifact that survives the pipeline must carry a formal proof, and every proof must be demonstrated falsifiable before it counts.
 
