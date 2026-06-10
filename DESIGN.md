@@ -46,7 +46,7 @@ Properties of this check that similarity cannot have:
 
 The full retrieval pipeline becomes: assertion-centric ANN shortlist (§2, cheap, tuned for recall) → SBY subsumption check per shortlisted candidate (sound) → only formally-accepted candidates reach composition, which then proves cross-boundary properties over the same stubs.
 
-> **Citation gap (author to fill):** the contract/refinement literature this should be situated in — assume-guarantee contract theory and refinement/subsumption checking — is not covered by the repo's notes. No citation is offered here rather than an invented one.
+> **Foundations:** the contract formalism here follows assume-guarantee contract theory as consolidated in Benveniste et al., *Contracts for System Design* (Foundations and Trends in EDA, 2018); the compositional assume-guarantee reasoning underlying this section's entailment check goes back to Abadi & Lamport, *Composing Specifications* (ACM TOPLAS, 1993).
 
 ## 4. The dual vector space architecture: functional + PPA
 
@@ -73,20 +73,20 @@ The plan of record:
 
 ## 6. Prior art the design drew on
 
-Pulled from the repo's research notes (`research/specloop_vector_idea.md`) and planning documents. **These citations were carried in project notes and should be verified against the actual papers before external use.**
+Pulled from the repo's research notes (`research/specloop_vector_idea.md`) and planning documents. **ASPEN (MLCAD 2025), FastPASE (ISQED 2024), and STELLAR (DAC 2026) have been verified against the published papers; ROVER, AssertLLM, AutoSVA, and HW2VEC are well-established; the remaining entries are carried from project notes.**
 
 | Work | Relevance |
 |---|---|
 | ROVER (Intel + Imperial, TCAD 2024) | RTL optimization as e-graph rewriting with formally verified equivalence-preserving rules — basis for §4's rewriting loop |
 | ASPEN (Cornell, MLCAD 2025) | LLM-proposed rewrite rules, formally verified before entering the pool, with real PPA feedback |
-| FastPASE (ISQED 2024) | PPA prediction from RTL dataflow graphs, 16–155× faster than synthesis (~13% error) |
+| FastPASE (Levy, Walston, Samanta, Raina, Diamantidis — ISQED 2024) | GCN-based PPA prediction from RTL dataflow graphs, 16.7–155× faster than a commercial physical-design flow (~13% NMAE) |
 | MasterRTL (TCAD 2024) | Pre-synthesis module-level PPA estimation from operator graphs |
 | DeepRTL (ICLR 2025) / DeepRTL2 (ACL 2025) | RTL understanding/embedding models; DeepRTL2 unifies generation + embedding and regresses PPA from embeddings |
-| STELLAR (2026) | AST structural fingerprints retrieving (RTL, SVA) pairs to guide assertion generation — nearest neighbor to SpecLoop's RAG; structural, not contract-grounded |
+| STELLAR (arXiv 2601.19903, DAC 2026) | AST structural fingerprints retrieving (RTL, SVA) pairs to guide assertion generation — nearest neighbor to SpecLoop's RAG; structural, not contract-grounded |
 | AssertLLM / AssertionForge / SANGAM | LLM assertion generation from human-written specs; none build a self-expanding proven library |
 | AutoSVA (Princeton) | Automatic SVA testbench generation for module interactions (deadlock/livelock focus); not compositional |
 | VERT dataset (2025) | Large-scale SVA fine-tuning data — the case for the training flywheel in the original plan |
 | HW2VEC (2021) | Circuit-as-graph embeddings (Trojan detection) — early evidence circuits embed meaningfully |
 | Embedding-model candidates from the planning docs | UniXcoder + BGE-large (one plan), BGE-M3 + nomic-embed-code + DeepRTL2 (the other) — superseded by §2's per-contract design |
 
-Known gaps for the author to fill: assume-guarantee contract theory / refinement-checking citations for §3, and the Verific/Tabby CAD capability claims in §5.
+Known gap for the author to fill: the Verific/Tabby CAD capability claims in §5.
