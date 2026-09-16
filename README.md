@@ -4,7 +4,7 @@
 
 This one-minute video explains what SpecLoop is, why it starts from formally verified RTL, and how it turns a natural-language request into a proven, synthesizable hardware design.
 
-[▶ Watch the SpecLoop overview video](docs/planning/last%20version.mp4)
+![SpecLoop video overview](docs/planning/specloop-overview.gif)
 
 ## Product demo
 
