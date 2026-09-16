@@ -1,5 +1,15 @@
 # SpecLoop
 
+## Video overview
+
+This one-minute video explains what SpecLoop is, why it starts from formally verified RTL, and how it turns a natural-language request into a proven, synthesizable hardware design.
+
+[▶ Watch the SpecLoop overview video](docs/planning/last%20version.mp4)
+
+## Product demo
+
+The demo below shows the end-to-end flow: SpecLoop plans a design, retrieves proven hardware blocks, composes them, and formally verifies the result.
+
 ![SpecLoop end-to-end demo](docs/demo.gif)
 
 SpecLoop is an experiment in generating hardware from RTL that has already been formally verified.
